@@ -65,38 +65,6 @@ app.get("/api/simulador/simulacion/:id", async (req, res) => {
   } catch (e: any) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// API-Football (api-sports.io) — partidos
-app.get("/api/partidos/proximos", async (_req, res) => {
-  try {
-    const r = await fetch(`${FOOTBALL_BASE}/fixtures?league=${PL_LEAGUE}&season=${PL_SEASON}&status=NS&next=5`, {
-      headers: FOOTBALL_HEADERS,
-    });
-    const data: any = await r.json();
-    res.json({ success: true, data: data.response || [] });
-  } catch (e: any) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.get("/api/partidos/resultados", async (_req, res) => {
-  try {
-    const r = await fetch(`${FOOTBALL_BASE}/fixtures?league=${PL_LEAGUE}&season=${PL_SEASON}&status=FT-AET-PEN&last=5`, {
-      headers: FOOTBALL_HEADERS,
-    });
-    const data: any = await r.json();
-    res.json({ success: true, data: data.response || [] });
-  } catch (e: any) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.get("/api/partidos/standings", async (_req, res) => {
-  try {
-    const r = await fetch(`${FOOTBALL_BASE}/standings?league=${PL_LEAGUE}&season=${PL_SEASON}`, {
-      headers: FOOTBALL_HEADERS,
-    });
-    const data: any = await r.json();
-    const standings = data.response?.[0]?.league?.standings?.[0] || [];
-    res.json({ success: true, data: standings });
-  } catch (e: any) { res.status(500).json({ success: false, error: e.message }); }
-});
-
 // Tienda
 app.get("/api/tienda/productos", async (_req, res) => {
   try {
