@@ -8,7 +8,7 @@ const FOOTBALL_KEY = process.env.FOOTBALL_KEY || "45379e002ce9894ab347104d241652
 const FOOTBALL_BASE = "https://v3.football.api-sports.io";
 const FOOTBALL_HEADERS = { "x-apisports-key": FOOTBALL_KEY };
 const PL_LEAGUE = 39;
-const PL_SEASON = 2024;
+const PL_SEASON = 2025;
 
 const pool = new Pool({
   host: process.env.DB_HOST || "192.168.1.24",
