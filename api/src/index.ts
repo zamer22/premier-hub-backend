@@ -4,7 +4,11 @@ import { Pool } from "pg";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
-const FOOTBALL_KEY = process.env.FOOTBALL_KEY || "93abe95b428049b6b62ada97a84167bd";
+const FOOTBALL_KEY = process.env.FOOTBALL_KEY || "45379e002ce9894ab347104d24165229";
+const FOOTBALL_BASE = "https://v3.football.api-sports.io";
+const FOOTBALL_HEADERS = { "x-apisports-key": FOOTBALL_KEY };
+const PL_LEAGUE = 39;
+const PL_SEASON = 2024;
 
 const pool = new Pool({
   host: process.env.DB_HOST || "192.168.1.24",
@@ -61,34 +65,35 @@ app.get("/api/simulador/simulacion/:id", async (req, res) => {
   } catch (e: any) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// Football-Data.org — partidos
+// API-Football (api-sports.io) — partidos
 app.get("/api/partidos/proximos", async (_req, res) => {
   try {
-    const r = await fetch("https://api.football-data.org/v4/competitions/PL/matches?status=SCHEDULED&limit=5", {
-      headers: { "X-Auth-Token": FOOTBALL_KEY },
+    const r = await fetch(`${FOOTBALL_BASE}/fixtures?league=${PL_LEAGUE}&season=${PL_SEASON}&status=NS&next=5`, {
+      headers: FOOTBALL_HEADERS,
     });
     const data: any = await r.json();
-    res.json({ success: true, data: data.matches || [] });
+    res.json({ success: true, data: data.response || [] });
   } catch (e: any) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.get("/api/partidos/resultados", async (_req, res) => {
   try {
-    const r = await fetch("https://api.football-data.org/v4/competitions/PL/matches?status=FINISHED&limit=5", {
-      headers: { "X-Auth-Token": FOOTBALL_KEY },
+    const r = await fetch(`${FOOTBALL_BASE}/fixtures?league=${PL_LEAGUE}&season=${PL_SEASON}&status=FT-AET-PEN&last=5`, {
+      headers: FOOTBALL_HEADERS,
     });
     const data: any = await r.json();
-    res.json({ success: true, data: data.matches || [] });
+    res.json({ success: true, data: data.response || [] });
   } catch (e: any) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.get("/api/partidos/standings", async (_req, res) => {
   try {
-    const r = await fetch("https://api.football-data.org/v4/competitions/PL/standings", {
-      headers: { "X-Auth-Token": FOOTBALL_KEY },
+    const r = await fetch(`${FOOTBALL_BASE}/standings?league=${PL_LEAGUE}&season=${PL_SEASON}`, {
+      headers: FOOTBALL_HEADERS,
     });
     const data: any = await r.json();
-    res.json({ success: true, data: data.standings || [] });
+    const standings = data.response?.[0]?.league?.standings?.[0] || [];
+    res.json({ success: true, data: standings });
   } catch (e: any) { res.status(500).json({ success: false, error: e.message }); }
 });
 
