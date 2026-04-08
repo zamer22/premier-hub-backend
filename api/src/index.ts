@@ -23,6 +23,46 @@ app.use(express.json());
 
 app.get("/api/health", (_req, res) => { res.json({ status: "ok" }); });
 
+// Login
+app.post("/api/auth/login", async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const result = await pool.query(
+      `SELECT id_usuario, nickname, email FROM premier.usuario 
+       WHERE email = $1 AND password = crypt($2, password)`,
+      [email, password]
+    );
+    if (result.rows.length === 0) {
+      return res.status(401).json({ success: false, error: "Credenciales incorrectas" });
+    }
+    res.json({ success: true, user: result.rows[0] });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// Registro
+app.post("/api/auth/registro", async (req, res) => {
+  const { email, nickname, password } = req.body;
+  try {
+    const existe = await pool.query(
+      `SELECT id_usuario FROM premier.usuario WHERE email = $1 OR nickname = $2`,
+      [email, nickname]
+    );
+    if (existe.rows.length > 0) {
+      return res.status(400).json({ success: false, error: "Email o usuario ya existe" });
+    }
+    const result = await pool.query(
+      `INSERT INTO premier.usuario (email, nickname, password, dinero) 
+       VALUES ($1, $2, crypt($3, gen_salt('bf')), 1000) RETURNING id_usuario, nickname, email`,
+      [email, nickname, password]
+    );
+    res.json({ success: true, user: result.rows[0] });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // Ranking general
 app.get("/api/ranking", async (_req, res) => {
   try {
