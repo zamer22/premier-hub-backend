@@ -7,6 +7,8 @@ const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const pg_1 = require("pg");
 const dotenv_1 = __importDefault(require("dotenv"));
+const api_noticias_1 = __importDefault(require("./rutas/api_noticias"));
+const premierLeagueTeams_1 = require("./utils/premierLeagueTeams");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const PORT = Number(process.env.PORT) || 4000;
@@ -19,11 +21,6 @@ const FOOTBALL_HEADERS = {
 };
 const PL_LEAGUE = 39;
 const PL_SEASON = 2025;
-// configuración de la API de noticias
-const NEWS_BASE = "https://newsapi.org/v2";
-const NEWS_HEADERS = {
-    "X-Api-Key": process.env.NEWS_API_KEY,
-};
 // conexión a la base de datos
 const pool = new pg_1.Pool({
     host: process.env.DB_HOST,
@@ -35,6 +32,7 @@ const pool = new pg_1.Pool({
 // middleware
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
+app.use("/api/noticias", api_noticias_1.default);
 // consulta del servidor
 app.get("/api/health", (_req, res) => {
     res.json({ status: "ok" });
@@ -127,6 +125,22 @@ app.get("/api/partidos/standings", async (_req, res) => {
         res.status(500).json({ success: false, error: e.message });
     }
 });
+app.get("/api/partidos/equipos", async (_req, res) => {
+    try {
+        const teams = await (0, premierLeagueTeams_1.fetchPremierLeagueTeams)();
+        res.json({
+            success: true,
+            league: "Premier League",
+            season: PL_SEASON,
+            count: teams.length,
+            keywords: (0, premierLeagueTeams_1.buildPremierLeagueNewsKeywords)(teams),
+            data: teams,
+        });
+    }
+    catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
 /* ---------------------------------------------------------
 Seccion de la tienda
 --------------------------------------------------------- */
@@ -180,100 +194,6 @@ app.post("/api/tienda/comprar", async (req, res) => {
     }
     finally {
         client.release();
-    }
-});
-/* ---------------------------------------------------------
-Seccion de noticias (NewsAPI)
---------------------------------------------------------- */
-const PREMIER_NEWS_QUERY = encodeURIComponent('"Premier League"');
-const OTHER_COMPETITIONS = [
-    "champions league",
-    "europa league",
-    "conference league",
-    "la liga",
-    "bundesliga",
-    "serie a",
-    "ligue 1",
-    "mls",
-    "saudi pro league",
-    "world cup",
-    "copa del rey",
-    "fa cup",
-    "carabao cup",
-];
-const PREMIER_SIGNALS = [
-    "premier league",
-    "english premier league",
-    "epl",
-    "premierleague",
-];
-function cleanNewsText(value) {
-    if (typeof value !== "string")
-        return null;
-    const cleaned = value
-        .replace(/\s*\[\+\d+\s+chars\]\s*$/i, "")
-        .replace(/\s+/g, " ")
-        .trim();
-    return cleaned.length > 0 ? cleaned : null;
-}
-function isPremierLeagueArticle(article) {
-    const text = [
-        article?.title,
-        article?.description,
-        article?.content,
-        article?.source?.name,
-    ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-    const hasPremierSignal = PREMIER_SIGNALS.some((signal) => text.includes(signal));
-    if (!hasPremierSignal) {
-        return false;
-    }
-    return !OTHER_COMPETITIONS.some((competition) => text.includes(competition));
-}
-app.get("/api/noticias", async (_req, res) => {
-    try {
-        const url = `${NEWS_BASE}/everything?q=${PREMIER_NEWS_QUERY}` +
-            "&searchIn=title,description,content" +
-            "&language=en" +
-            "&sortBy=publishedAt" +
-            "&pageSize=25";
-        const r = await fetch(url, {
-            headers: NEWS_HEADERS,
-        });
-        const json = await r.json();
-        if (json.status !== "ok") {
-            return res.status(500).json({
-                success: false,
-                error: json.message,
-            });
-        }
-        const transformed = (json.articles || [])
-            .filter((article) => isPremierLeagueArticle(article))
-            .map((article, index) => ({
-            id: index + 1,
-            title: cleanNewsText(article.title),
-            summary: cleanNewsText(article.description),
-            content: cleanNewsText(article.content),
-            source: cleanNewsText(article.source?.name),
-            image: cleanNewsText(article.urlToImage),
-            url: cleanNewsText(article.url),
-            publishedAt: article.publishedAt,
-            category: "Premier League",
-            readTime: 3,
-        }))
-            .filter((article) => article.title && article.summary);
-        res.json({
-            success: true,
-            data: transformed,
-        });
-    }
-    catch (e) {
-        res.status(500).json({
-            success: false,
-            error: e.message,
-        });
     }
 });
 // Correr la app
