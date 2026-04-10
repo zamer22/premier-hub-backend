@@ -2,23 +2,12 @@ import express from "express";
 import cors from "cors";
 import { Pool } from "pg";
 import dotenv from "dotenv";
+import { footballRouter } from "./apifootball";
 
 dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
-
-// Variables de entorno
-const APIFOOTBALL_KEY = process.env.APIFOOTBALL_KEY!;
-
-// Configuración de la API de apifootball
-const FOOTBALL_BASE = "https://v3.football.api-sports.io";
-const FOOTBALL_HEADERS = {
-  "x-apisports-key": APIFOOTBALL_KEY,
-};
-const PL_LEAGUE = 39;
-const PL_SEASON = 2025;
-
 
 // configuración de la API de noticias
 const NEWS_BASE = "https://newsapi.org/v2";
@@ -40,6 +29,9 @@ const pool = new Pool({
 // middleware
 app.use(cors());
 app.use(express.json());
+
+// Registrar routers
+app.use("/api", footballRouter);
 
 
 // consulta del servidor
@@ -111,58 +103,6 @@ app.get("/api/simulador/simulacion/:id", async (req, res) => {
     );
 
     res.json({ success: true, data: result.rows[0] });
-  } catch (e: any) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-
-/* ---------------------------------------------------------
-Seccion de los partidos (apifootball)
---------------------------------------------------------- */
-app.get("/api/partidos/proximos", async (_req, res) => {
-  try {
-    const r = await fetch(
-      `${FOOTBALL_BASE}/fixtures?league=${PL_LEAGUE}&season=${PL_SEASON}&next=10`,
-      { headers: FOOTBALL_HEADERS }
-    );
-
-    const json: any = await r.json();
-
-    res.json({ success: true, data: json.response || [] });
-  } catch (e: any) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-
-app.get("/api/partidos/resultados", async (_req, res) => {
-  try {
-    const r = await fetch(
-      `${FOOTBALL_BASE}/fixtures?league=${PL_LEAGUE}&season=${PL_SEASON}&last=10`,
-      { headers: FOOTBALL_HEADERS }
-    );
-
-    const json: any = await r.json();
-
-    res.json({ success: true, data: json.response || [] });
-  } catch (e: any) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-
-app.get("/api/partidos/standings", async (_req, res) => {
-  try {
-    const r = await fetch(
-      `${FOOTBALL_BASE}/standings?league=${PL_LEAGUE}&season=${PL_SEASON}`,
-      { headers: FOOTBALL_HEADERS }
-    );
-
-    const json: any = await r.json();
-    const standings = json.response?.[0]?.league?.standings?.[0] || [];
-
-    res.json({ success: true, data: standings });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message });
   }
