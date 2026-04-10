@@ -2,9 +2,10 @@ import express from "express";
 import cors from "cors";
 import { Pool } from "pg";
 import dotenv from "dotenv";
-import { footballRouter } from "./apifootball";
 
 dotenv.config();
+
+import { footballRouter } from "./apifootball";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;

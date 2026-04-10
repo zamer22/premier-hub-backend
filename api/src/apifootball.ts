@@ -1,4 +1,7 @@
 import { Router } from "express";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const APIFOOTBALL_KEY = process.env.APIFOOTBALL_KEY;
 const APIFOOTBALL_BASE = "https://v3.football.api-sports.io";
