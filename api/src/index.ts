@@ -2,22 +2,19 @@ import express from "express";
 import cors from "cors";
 import { Pool } from "pg";
 import dotenv from "dotenv";
-import noticiasRouter from "./rutas/api_noticias";
+
 dotenv.config();
+
+import { footballRouter } from "./apifootball";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
 
-// Variables de entorno
-const APIFOOTBALL_KEY = process.env.APIFOOTBALL_KEY!;
-
-// Configuración de la API de apifootball
-const FOOTBALL_BASE = "https://v3.football.api-sports.io";
-const FOOTBALL_HEADERS = {
-  "x-apisports-key": APIFOOTBALL_KEY,
+// configuración de la API de noticias
+const NEWS_BASE = "https://newsapi.org/v2";
+const NEWS_HEADERS = {
+  "X-Api-Key": process.env.NEWS_API_KEY!,
 };
-const PL_LEAGUE = 39;
-const PL_SEASON = 2025;
 
 
 // conexión a la base de datos
@@ -33,7 +30,9 @@ const pool = new Pool({
 // middleware
 app.use(cors());
 app.use(express.json());
-app.use("/api/noticias", noticiasRouter);
+
+// Registrar routers
+app.use("/api", footballRouter);
 
 
 // consulta del servidor
@@ -107,84 +106,6 @@ app.get("/api/simulador/simulacion/:id", async (req, res) => {
     res.json({ success: true, data: result.rows[0] });
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-
-/* ---------------------------------------------------------
-Seccion de los partidos (apifootball)
---------------------------------------------------------- */
-app.get("/api/partidos/proximos", async (_req, res) => {
-  try {
-    const r = await fetch(
-      `${FOOTBALL_BASE}/fixtures?league=${PL_LEAGUE}&season=${PL_SEASON}&next=10`,
-      { headers: FOOTBALL_HEADERS }
-    );
-
-    const json: any = await r.json();
-
-    res.json({ success: true, data: json.response || [] });
-  } catch (e: any) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-
-app.get("/api/partidos/resultados", async (_req, res) => {
-  try {
-    const r = await fetch(
-      `${FOOTBALL_BASE}/fixtures?league=${PL_LEAGUE}&season=${PL_SEASON}&last=10`,
-      { headers: FOOTBALL_HEADERS }
-    );
-
-    const json: any = await r.json();
-
-    res.json({ success: true, data: json.response || [] });
-  } catch (e: any) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-
-app.get("/api/partidos/standings", async (_req, res) => {
-  try {
-    const r = await fetch(
-      `${FOOTBALL_BASE}/standings?league=${PL_LEAGUE}&season=${PL_SEASON}`,
-      { headers: FOOTBALL_HEADERS }
-    );
-
-    const json: any = await r.json();
-    const standings = json.response?.[0]?.league?.standings?.[0] || [];
-
-    res.json({ success: true, data: standings });
-  } catch (e: any) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-
-app.get("/api/partidos/equipos", async (_req, res) => {
-  try {
-    const r = await fetch(
-      `${FOOTBALL_BASE}/teams?league=${PL_LEAGUE}&season=${PL_SEASON}`,
-      { headers: FOOTBALL_HEADERS }
-    );
-
-    const json: any = await r.json();
-
-    const teamNames = (json.response || [])
-      .map((t: any) => t.team?.name)
-      .filter(Boolean);
-
-    res.json({
-      success: true,
-      data: teamNames,
-    });
-  } catch (e: any) {
-    res.status(500).json({
-      success: false,
-      error: e.message,
-    });
   }
 });
 
@@ -275,6 +196,118 @@ app.post("/api/tienda/comprar", async (req, res) => {
     res.status(500).json({ success: false, error: e.message });
   } finally {
     client.release();
+  }
+});
+
+
+/* ---------------------------------------------------------
+Seccion de noticias (NewsAPI)
+--------------------------------------------------------- */
+const PREMIER_NEWS_QUERY = encodeURIComponent('"Premier League"');
+
+const OTHER_COMPETITIONS = [
+  "champions league",
+  "europa league",
+  "conference league",
+  "la liga",
+  "bundesliga",
+  "serie a",
+  "ligue 1",
+  "mls",
+  "saudi pro league",
+  "world cup",
+  "copa del rey",
+  "fa cup",
+  "carabao cup",
+];
+
+const PREMIER_SIGNALS = [
+  "premier league",
+  "english premier league",
+  "epl",
+  "premierleague",
+];
+
+function cleanNewsText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+
+  const cleaned = value
+    .replace(/\s*\[\+\d+\s+chars\]\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function isPremierLeagueArticle(article: any): boolean {
+  const text = [
+    article?.title,
+    article?.description,
+    article?.content,
+    article?.source?.name,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  const hasPremierSignal = PREMIER_SIGNALS.some((signal) =>
+    text.includes(signal)
+  );
+
+  if (!hasPremierSignal) {
+    return false;
+  }
+
+  return !OTHER_COMPETITIONS.some((competition) => text.includes(competition));
+}
+
+app.get("/api/noticias", async (_req, res) => {
+  try {
+    const url =
+      `${NEWS_BASE}/everything?q=${PREMIER_NEWS_QUERY}` +
+      "&searchIn=title,description,content" +
+      "&language=en" +
+      "&sortBy=publishedAt" +
+      "&pageSize=25";
+
+    const r = await fetch(url, {
+      headers: NEWS_HEADERS,
+    });
+
+    const json: any = await r.json();
+
+    if (json.status !== "ok") {
+      return res.status(500).json({
+        success: false,
+        error: json.message,
+      });
+    }
+
+    const transformed = (json.articles || [])
+      .filter((article: any) => isPremierLeagueArticle(article))
+      .map((article: any, index: number) => ({
+        id: index + 1,
+        title: cleanNewsText(article.title),
+        summary: cleanNewsText(article.description),
+        content: cleanNewsText(article.content),
+        source: cleanNewsText(article.source?.name),
+        image: cleanNewsText(article.urlToImage),
+        url: cleanNewsText(article.url),
+        publishedAt: article.publishedAt,
+        category: "Premier League",
+        readTime: 3,
+      }))
+      .filter((article: any) => article.title && article.summary);
+
+    res.json({
+      success: true,
+      data: transformed,
+    });
+  } catch (e: any) {
+    res.status(500).json({
+      success: false,
+      error: e.message,
+    });
   }
 });
 
