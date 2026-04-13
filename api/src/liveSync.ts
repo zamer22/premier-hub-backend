@@ -24,11 +24,9 @@ export const liveRouter = Router();
 let liveInterval: NodeJS.Timeout | null = null;
 let currentFixtureId: number | null = null;
 
-// ----------------------------------------------------
 // Función principal para sincronizar un fixture por ID
-// ----------------------------------------------------
 async function syncFixtureById(fixtureId: number) {
-  // 1) Traer partido principal
+  // traer partido 
   const fixtureJson = await footballFetch<any[]>("/fixtures", {
     id: fixtureId,
   });
@@ -39,7 +37,7 @@ async function syncFixtureById(fixtureId: number) {
     throw new Error(`No se encontró el fixture ${fixtureId}`);
   }
 
-  // Guardar partido principal
+  // guardar partido 
   const { error: matchError } = await supabase
     .from("live_matches")
     .upsert({
@@ -61,7 +59,7 @@ async function syncFixtureById(fixtureId: number) {
     throw new Error(`Error guardando live_matches: ${matchError.message}`);
   }
 
-  // 2) Traer lineups
+  // lineups
   const lineupsJson = await footballFetch<any[]>("/fixtures/lineups", {
     fixture: fixtureId,
   });
@@ -122,7 +120,7 @@ async function syncFixtureById(fixtureId: number) {
     }
   }
 
-  // 3) Traer estadísticas
+  // estadísticas
   const statsJson = await footballFetch<any[]>("/fixtures/statistics", {
     fixture: fixtureId,
   });
@@ -179,9 +177,7 @@ async function syncFixtureById(fixtureId: number) {
   };
 }
 
-// ----------------------------------------------------
 // Auto-sync
-// ----------------------------------------------------
 export function startFixtureAutoSync(fixtureId: number, intervalMs = 60_000) {  if (liveInterval) {
     clearInterval(liveInterval);
     liveInterval = null;
@@ -220,9 +216,7 @@ export function stopFixtureAutoSync() {  if (liveInterval) {
   console.log("[liveSync] Auto-sync detenido");
 }
 
-// ----------------------------------------------------
-// POST manual para sincronizar un partido una sola vez
-// ----------------------------------------------------
+// POST para sincronizar  partido una sola vez
 liveRouter.post("/partidos/live/sync/:fixtureId", async (req, res) => {
   try {
     const fixtureId = Number(req.params.fixtureId);
@@ -244,9 +238,7 @@ liveRouter.post("/partidos/live/sync/:fixtureId", async (req, res) => {
   }
 });
 
-// ----------------------------------------------------
-// POST para iniciar auto-sync
-// ----------------------------------------------------
+// POST para auto-sync
 liveRouter.post("/partidos/live/start/:fixtureId", async (req, res) => {
   try {
     const fixtureId = Number(req.params.fixtureId);
@@ -273,9 +265,7 @@ liveRouter.post("/partidos/live/start/:fixtureId", async (req, res) => {
   }
 });
 
-// ----------------------------------------------------
 // POST para detener auto-sync
-// ----------------------------------------------------
 liveRouter.post("/partidos/live/stop", async (_req, res) => {
   try {
     stopFixtureAutoSync();
@@ -292,9 +282,7 @@ liveRouter.post("/partidos/live/stop", async (_req, res) => {
   }
 });
 
-// ----------------------------------------------------
-// GET estado del auto-sync
-// ----------------------------------------------------
+// GET estado auto-sync
 liveRouter.get("/partidos/live/autosync/status", async (_req, res) => {
   return res.json({
     success: true,
@@ -303,9 +291,7 @@ liveRouter.get("/partidos/live/autosync/status", async (_req, res) => {
   });
 });
 
-// ----------------------------------------------------
 // GET partidos guardados
-// ----------------------------------------------------
 liveRouter.get("/partidos/live", async (_req, res) => {
   try {
     const { data, error } = await supabase
@@ -321,9 +307,7 @@ liveRouter.get("/partidos/live", async (_req, res) => {
   }
 });
 
-// ----------------------------------------------------
-// GET lineups de un partido
-// ----------------------------------------------------
+// GET lineups de partido
 liveRouter.get("/partidos/live/:id/lineups", async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -341,9 +325,7 @@ liveRouter.get("/partidos/live/:id/lineups", async (req, res) => {
   }
 });
 
-// ----------------------------------------------------
 // GET stats de un partido
-// ----------------------------------------------------
 liveRouter.get("/partidos/live/:id/stats", async (req, res) => {
   try {
     const { data, error } = await supabase
