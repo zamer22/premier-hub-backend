@@ -8,7 +8,6 @@ const cors_1 = __importDefault(require("cors"));
 const pg_1 = require("pg");
 const dotenv_1 = __importDefault(require("dotenv"));
 const api_noticias_1 = __importDefault(require("./rutas/api_noticias"));
-const premierLeagueTeams_1 = require("./utils/premierLeagueTeams");
 dotenv_1.default.config();
 const app = (0, express_1.default)();
 const PORT = Number(process.env.PORT) || 4000;
@@ -127,18 +126,21 @@ app.get("/api/partidos/standings", async (_req, res) => {
 });
 app.get("/api/partidos/equipos", async (_req, res) => {
     try {
-        const teams = await (0, premierLeagueTeams_1.fetchPremierLeagueTeams)();
+        const r = await fetch(`${FOOTBALL_BASE}/teams?league=${PL_LEAGUE}&season=${PL_SEASON}`, { headers: FOOTBALL_HEADERS });
+        const json = await r.json();
+        const teamNames = (json.response || [])
+            .map((t) => t.team?.name)
+            .filter(Boolean);
         res.json({
             success: true,
-            league: "Premier League",
-            season: PL_SEASON,
-            count: teams.length,
-            keywords: (0, premierLeagueTeams_1.buildPremierLeagueNewsKeywords)(teams),
-            data: teams,
+            data: teamNames,
         });
     }
     catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({
+            success: false,
+            error: e.message,
+        });
     }
 });
 /* ---------------------------------------------------------

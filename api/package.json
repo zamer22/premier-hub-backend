@@ -7,17 +7,20 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@mozilla/readability": "^0.6.0",
     "@supabase/supabase-js": "^2.45.0",
     "@types/dotenv": "^6.1.1",
     "@types/pg": "^8.18.0",
     "cors": "^2.8.5",
     "dotenv": "^17.4.1",
     "express": "^4.21.0",
+    "jsdom": "^29.0.2",
     "pg": "^8.20.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
+    "@types/jsdom": "^28.0.1",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   }
