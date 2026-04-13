@@ -6,6 +6,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 import { footballRouter } from "./apifootball";
+import { liveRouter } from "./livesync";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
@@ -16,7 +17,6 @@ const NEWS_HEADERS = {
   "X-Api-Key": process.env.NEWS_API_KEY!,
 };
 
-
 // conexión a la base de datos
 const pool = new Pool({
   host: process.env.DB_HOST,
@@ -26,20 +26,18 @@ const pool = new Pool({
   password: process.env.DB_PASSWORD,
 });
 
-
 // middleware
 app.use(cors());
 app.use(express.json());
 
 // Registrar routers
 app.use("/api", footballRouter);
-
+app.use("/api", liveRouter);
 
 // consulta del servidor
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
 });
-
 
 // Consulta general del ranking de usuarios
 app.get("/api/ranking", async (_req, res) => {
@@ -55,7 +53,6 @@ app.get("/api/ranking", async (_req, res) => {
     res.status(500).json({ success: false, error: e.message });
   }
 });
-
 
 /* ---------------------------------------------------------
 Seccion del simulador
@@ -78,7 +75,6 @@ app.get("/api/simulador/ranking", async (_req, res) => {
   }
 });
 
-
 app.post("/api/simulador/simular", async (req, res) => {
   try {
     const { id_usuario, partido_data, cambios } = req.body;
@@ -95,7 +91,6 @@ app.post("/api/simulador/simular", async (req, res) => {
   }
 });
 
-
 app.get("/api/simulador/simulacion/:id", async (req, res) => {
   try {
     const result = await pool.query(
@@ -108,7 +103,6 @@ app.get("/api/simulador/simulacion/:id", async (req, res) => {
     res.status(500).json({ success: false, error: e.message });
   }
 });
-
 
 /* ---------------------------------------------------------
 Seccion de la tienda
@@ -125,7 +119,6 @@ app.get("/api/tienda/productos", async (_req, res) => {
     res.status(500).json({ success: false, error: e.message });
   }
 });
-
 
 app.post("/api/tienda/comprar", async (req, res) => {
   const { id_usuario, id_producto } = req.body;
@@ -198,7 +191,6 @@ app.post("/api/tienda/comprar", async (req, res) => {
     client.release();
   }
 });
-
 
 /* ---------------------------------------------------------
 Seccion de noticias (NewsAPI)
@@ -310,7 +302,6 @@ app.get("/api/noticias", async (_req, res) => {
     });
   }
 });
-
 
 // Correr la app
 app.listen(PORT, "0.0.0.0", () => {
