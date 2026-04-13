@@ -11,11 +11,11 @@ const PL_LEAGUE = 39;
 const PL_SEASON = 2025;
 
 const pool = new Pool({
-  host: process.env.DB_HOST || "192.168.1.24",
+  host: process.env.DB_HOST || "localhost",
   port: Number(process.env.DB_PORT) || 54322,
   database: "postgres",
   user: "postgres",
-  password: process.env.DB_PASSWORD || "",
+  password: process.env.DB_PASSWORD || "postgres",
 });
 
 app.use(cors());
@@ -187,5 +187,5 @@ app.post("/api/tienda/comprar", async (req, res) => {
 });
 
 app.listen(PORT, "0.0.0.0", () => { 
-  console.log(`🚀 PremierHub API corriendo en puerto ${PORT}`); 
+  console.log(`PremierHub API corriendo en puerto ${PORT}`); 
 });
