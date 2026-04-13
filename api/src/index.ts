@@ -23,7 +23,7 @@ app.use(express.json());
 
 app.get("/api/health", (_req, res) => { res.json({ status: "ok" }); });
 
-// --- AUTH: LOGIN ---
+// login
 app.post("/api/auth/login", async (req, res) => {
   const { correo, contrasena } = req.body;
   try {
@@ -47,11 +47,11 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-// --- AUTH: REGISTRO ---
+// registro
 app.post("/api/auth/registro", async (req, res) => {
   const { correo, nombre_usuario, nickname, contrasena } = req.body;
   try {
-    // Validar si el usuario o correo ya existen
+    // Validacion de usuario
     const existe = await pool.query(
       `SELECT id_usuario FROM premier.usuario WHERE correo = $1 OR nickname = $2`,
       [correo, nickname]
@@ -61,10 +61,9 @@ app.post("/api/auth/registro", async (req, res) => {
       return res.status(400).json({ success: false, error: "El correo o el nickname ya están en uso" });
     }
 
-    // Insertar nuevo usuario con 1000 de dinero inicial
     const result = await pool.query(
       `INSERT INTO premier.usuario (nombre_usuario, correo, contrasena, nickname, dinero)
-       VALUES ($1, $2, $3, $4, 1000) 
+       VALUES ($1, $2, $3, $4, 0) 
        RETURNING id_usuario, nickname, nombre_usuario, correo, dinero`,
       [nombre_usuario, correo, contrasena, nickname]
     );
@@ -75,7 +74,7 @@ app.post("/api/auth/registro", async (req, res) => {
   }
 });
 
-// --- RANKING ---
+// ranking
 app.get("/api/ranking", async (_req, res) => {
   try {
     const result = await pool.query(`
@@ -87,7 +86,7 @@ app.get("/api/ranking", async (_req, res) => {
   } catch (e: any) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// --- SIMULADOR ---
+// simulador
 app.get("/api/simulador/ranking", async (_req, res) => {
   try {
     const result = await pool.query(`
@@ -117,7 +116,7 @@ app.get("/api/simulador/simulacion/:id", async (req, res) => {
   } catch (e: any) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// --- PARTIDOS (API EXTERNA) ---
+// partidos
 app.get("/api/partidos/proximos", async (_req, res) => {
   try {
     const r = await fetch(`${FOOTBALL_BASE}/fixtures?league=${PL_LEAGUE}&season=${PL_SEASON}&next=10`, { headers: FOOTBALL_HEADERS });
@@ -143,7 +142,7 @@ app.get("/api/partidos/standings", async (_req, res) => {
   } catch (e: any) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// --- TIENDA ---
+// tienda
 app.get("/api/tienda/productos", async (_req, res) => {
   try {
     const result = await pool.query(`SELECT * FROM premier.producto ORDER BY es_nuevo DESC, costo ASC`);
