@@ -182,8 +182,7 @@ async function syncFixtureById(fixtureId: number) {
 // ----------------------------------------------------
 // Auto-sync
 // ----------------------------------------------------
-function startFixtureAutoSync(fixtureId: number, intervalMs = 60_000) {
-  if (liveInterval) {
+export function startFixtureAutoSync(fixtureId: number, intervalMs = 60_000) {  if (liveInterval) {
     clearInterval(liveInterval);
     liveInterval = null;
   }
@@ -212,8 +211,7 @@ function startFixtureAutoSync(fixtureId: number, intervalMs = 60_000) {
   );
 }
 
-function stopFixtureAutoSync() {
-  if (liveInterval) {
+export function stopFixtureAutoSync() {  if (liveInterval) {
     clearInterval(liveInterval);
     liveInterval = null;
   }
