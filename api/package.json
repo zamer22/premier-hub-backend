@@ -7,10 +7,16 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+<<<<<<< HEAD
     "@supabase/supabase-js": "^2.103.0",
+=======
+    "@supabase/supabase-js": "^2.45.0",
+    "@types/cookie-parser": "^1.4.10",
+>>>>>>> origin/Tienda
     "@types/dotenv": "^6.1.1",
     "@types/pg": "^8.18.0",
     "bcrypt": "^6.0.0",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^17.4.1",
     "express": "^4.21.0",
