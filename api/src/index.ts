@@ -13,7 +13,7 @@ import noticiasRouter from "./rutas/api_noticias";
 import tiendaRouter from "./rutas/api_tienda_v2";
 import marketplaceRouter from "./rutas/api_marketplace";
 
-import { liveRouter, startFixtureAutoSync } from "./livesync";
+import { liveRouter, startFixtureAutoSync } from "./liveSync";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
