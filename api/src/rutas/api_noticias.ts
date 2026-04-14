@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { Readability } from "@mozilla/readability";
 import { JSDOM, VirtualConsole } from "jsdom";
+import supabase from "../db";
 
 const router = Router();
 
@@ -30,6 +31,9 @@ const SCRAPE_CANDIDATES = 16;
 const MAX_NEWS_RESULTS = 8;
 const SCRAPE_VIRTUAL_CONSOLE = new VirtualConsole();
 const MIN_SCORE = 3;
+const NEWS_CACHE_KEY = "latest";
+const NEWS_CACHE_TTL_MS =
+  1000 * 60 * (Number(process.env.NEWS_CACHE_TTL_MINUTES) || 20);
 
 type EquiposResponse = {
   data?: string[];
@@ -96,6 +100,18 @@ type CachedArticle = {
   article: ScrapedArticle;
 };
 
+type NewsSnapshotPayload = {
+  success: true;
+  count: number;
+  data: NoticiaTransformada[];
+};
+
+type CachedNewsRow = {
+  payload: NewsSnapshotPayload | null;
+  updated_at: string | null;
+  expires_at: string | null;
+};
+
 const TEAM_ALIASES: Record<string, string[]> = {
   arsenal: ["gunners"],
   "aston villa": ["villa"],
@@ -126,6 +142,7 @@ let equiposCache: string[] = [];
 let lastFetchEquipos = 0;
 
 const articleCache = new Map<string, CachedArticle>();
+let newsRefreshPromise: Promise<NewsSnapshotPayload> | null = null;
 
 /* --------------------------------------------------------------
    FUNCIONES DE AYUDA
@@ -539,6 +556,163 @@ function compareRankedArticles(a: RankedArticle, b: RankedArticle): number {
   return b.score - a.score;
 }
 
+function isMissingNewsCacheTable(error: { message?: string; code?: string } | null): boolean {
+  const message = `${error?.message || ""}`.toLowerCase();
+  return (
+    error?.code === "42P01" ||
+    (message.includes("noticias_cache") &&
+      (message.includes("does not exist") || message.includes("could not find")))
+  );
+}
+
+function isCacheExpired(expiresAt: string | null): boolean {
+  if (!expiresAt) {
+    return true;
+  }
+
+  const expirationTime = Date.parse(expiresAt);
+  return Number.isNaN(expirationTime) || expirationTime <= Date.now();
+}
+
+async function readNewsSnapshot(): Promise<{
+  payload: NewsSnapshotPayload;
+  updatedAt: string | null;
+  expiresAt: string | null;
+} | null> {
+  const { data, error } = await supabase
+    .from("noticias_cache")
+    .select("payload, updated_at, expires_at")
+    .eq("cache_key", NEWS_CACHE_KEY)
+    .maybeSingle<CachedNewsRow>();
+
+  if (error) {
+    if (!isMissingNewsCacheTable(error)) {
+      console.error("[api/noticias] Error leyendo cache en Supabase:", error.message);
+    }
+
+    return null;
+  }
+
+  if (!data?.payload || !Array.isArray(data.payload.data)) {
+    return null;
+  }
+
+  return {
+    payload: data.payload,
+    updatedAt: data.updated_at || null,
+    expiresAt: data.expires_at || null,
+  };
+}
+
+async function persistNewsSnapshot(payload: NewsSnapshotPayload): Promise<void> {
+  const now = new Date();
+  const { error } = await supabase.from("noticias_cache").upsert(
+    {
+      cache_key: NEWS_CACHE_KEY,
+      payload,
+      updated_at: now.toISOString(),
+      expires_at: new Date(now.getTime() + NEWS_CACHE_TTL_MS).toISOString(),
+    },
+    { onConflict: "cache_key" },
+  );
+
+  if (error && !isMissingNewsCacheTable(error)) {
+    console.error("[api/noticias] Error guardando cache en Supabase:", error.message);
+  }
+}
+
+async function buildNewsSnapshot(): Promise<NewsSnapshotPayload> {
+  const equipos = await getEquipos();
+
+  const query = encodeURIComponent(`"Premier League" OR football`);
+
+  const url =
+    `${NEWS_BASE}/everything?q=${query}` +
+    "&language=es" +
+    "&sortBy=publishedAt" +
+    "&pageSize=30";
+
+  const json = (await fetch(url, {
+    headers: {
+      "X-Api-Key": process.env.NEWS_API_KEY!,
+    },
+  }).then((r) => r.json())) as NewsApiResponse;
+
+  if (json.status !== "ok") {
+    throw new Error(json.message || "No se pudieron obtener noticias");
+  }
+
+  const rankedArticles: RankedArticle[] = (json.articles || [])
+    .map((raw) => {
+      const article = limpiaNoticias(raw);
+      const score = getRelevancia(article, equipos);
+
+      return {
+        article,
+        score,
+      };
+    })
+    .filter((item) => item.score >= MIN_SCORE)
+    .sort(compareRankedArticles);
+
+  const filtradas = (await enrichCandidates(rankedArticles))
+    .filter((item) => hasEnoughBody(item.article))
+    .sort(compareRankedArticles)
+    .slice(0, MAX_NEWS_RESULTS)
+    .map((item) => item.article);
+
+  const transformed: NoticiaTransformada[] = filtradas
+    .map((article, index) => {
+      const teams = extractTeams(article, equipos);
+      const summary = buildSummary(article);
+      const content = buildContent(article);
+
+      return {
+        id: index + 1,
+        title: article.title,
+        headline: buildHeadline(article),
+        summary,
+        content,
+        source: article.sourceName,
+        image: article.image,
+        url: article.url,
+        publishedAt: article.publishedAt,
+        category: "Premier League",
+        readTime: 3,
+        teams,
+        primaryTeam: teams[0] || null,
+      };
+    })
+    .filter(
+      (article) =>
+        Boolean(article.headline) &&
+        Boolean(article.summary) &&
+        Boolean(article.publishedAt),
+    );
+
+  return {
+    success: true,
+    count: transformed.length,
+    data: transformed,
+  };
+}
+
+async function refreshNewsSnapshot(): Promise<NewsSnapshotPayload> {
+  if (newsRefreshPromise) {
+    return newsRefreshPromise;
+  }
+
+  newsRefreshPromise = (async () => {
+    const payload = await buildNewsSnapshot();
+    await persistNewsSnapshot(payload);
+    return payload;
+  })().finally(() => {
+    newsRefreshPromise = null;
+  });
+
+  return newsRefreshPromise;
+}
+
 /* --------------------------------------------------------------
    ROUTE
 --------------------------------------------------------------- */
@@ -553,85 +727,47 @@ flujo general:
 - transforma la respuesta al formato que usa el frontend
 */
 router.get("/", async (_req: Request, res: Response) => {
+  let cachedSnapshot: Awaited<ReturnType<typeof readNewsSnapshot>> = null;
+
   try {
-    const equipos = await getEquipos();
+    cachedSnapshot = await readNewsSnapshot();
 
-    // query base para traer noticias sin sobrecargar demasiado el request
-    const query = encodeURIComponent(`"Premier League" OR football`);
+    if (cachedSnapshot?.payload.data.length) {
+      const stale = isCacheExpired(cachedSnapshot.expiresAt);
 
-    const url =
-      `${NEWS_BASE}/everything?q=${query}` +
-      "&language=es" +
-      "&sortBy=publishedAt" +
-      "&pageSize=30";
+      if (stale) {
+        void refreshNewsSnapshot().catch((refreshError) => {
+          console.error("[api/noticias] Error refrescando cache en segundo plano:", refreshError);
+        });
+      }
 
-    const json = (await fetch(url, {
-      headers: {
-        "X-Api-Key": process.env.NEWS_API_KEY!,
-      },
-    }).then((r) => r.json())) as NewsApiResponse;
-
-    if (json.status !== "ok") {
-      return res.status(500).json({
-        success: false,
-        error: json.message || "No se pudieron obtener noticias",
+      return res.json({
+        ...cachedSnapshot.payload,
+        cached: true,
+        stale,
+        cachedAt: cachedSnapshot.updatedAt,
       });
     }
 
-    const rankedArticles: RankedArticle[] = (json.articles || [])
-      .map((raw) => {
-        const article = limpiaNoticias(raw);
-        const score = getRelevancia(article, equipos);
-
-        return {
-          article,
-          score,
-        };
-      })
-      .filter((item) => item.score >= MIN_SCORE)
-      .sort(compareRankedArticles);
-
-    const filtradas = (await enrichCandidates(rankedArticles))
-      .filter((item) => hasEnoughBody(item.article))
-      .sort(compareRankedArticles)
-      .slice(0, MAX_NEWS_RESULTS)
-      .map((item) => item.article);
-
-    const transformed: NoticiaTransformada[] = filtradas
-      .map((article, index) => {
-        const teams = extractTeams(article, equipos);
-        const summary = buildSummary(article);
-        const content = buildContent(article);
-
-        return {
-          id: index + 1,
-          title: article.title,
-          headline: buildHeadline(article),
-          summary,
-          content,
-          source: article.sourceName,
-          image: article.image,
-          url: article.url,
-          publishedAt: article.publishedAt,
-          category: "Premier League",
-          readTime: 3,
-          teams,
-          primaryTeam: teams[0] || null,
-        };
-      })
-      .filter(
-        (article) =>
-          Boolean(article.headline) &&
-          Boolean(article.summary) &&
-          Boolean(article.publishedAt),
-      );
+    const freshSnapshot = await refreshNewsSnapshot();
 
     return res.json({
-      success: true,
-      count: transformed.length,
-      data: transformed,
+      ...freshSnapshot,
+      cached: false,
+      stale: false,
+      cachedAt: new Date().toISOString(),
     });
   } catch (error: unknown) {
+    if (cachedSnapshot?.payload.data.length) {
+      return res.json({
+        ...cachedSnapshot.payload,
+        cached: true,
+        stale: true,
+        fallback: true,
+        cachedAt: cachedSnapshot.updatedAt,
+      });
+    }
+
     const message =
       error instanceof Error ? error.message : "Error interno al obtener noticias";
 
