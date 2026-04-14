@@ -28,10 +28,13 @@ const CACHE_EQUIPOS_MS = 1000 * 60 * 60 * 24;
 const ARTICLE_CACHE_MS = 1000 * 60 * 60 * 6;
 const SCRAPE_TIMEOUT_MS = 8000;
 const SCRAPE_CANDIDATES = 16;
-const MAX_NEWS_RESULTS = 8;
+const RAW_NEWS_PAGE_SIZE = 25;
+const MAX_SOURCE_PAGES = 4;
+const DEFAULT_NEWS_LIMIT = 8;
+const MAX_NEWS_LIMIT = 12;
 const SCRAPE_VIRTUAL_CONSOLE = new VirtualConsole();
 const MIN_SCORE = 3;
-const NEWS_CACHE_KEY = "latest";
+const NEWS_CACHE_VERSION = "v2";
 const NEWS_CACHE_TTL_MS =
   1000 * 60 * (Number(process.env.NEWS_CACHE_TTL_MINUTES) || 20);
 
@@ -92,6 +95,7 @@ type NewsApiArticle = {
 type NewsApiResponse = {
   status?: string;
   message?: string;
+  totalResults?: number;
   articles?: NewsApiArticle[];
 };
 
@@ -103,6 +107,9 @@ type CachedArticle = {
 type NewsSnapshotPayload = {
   success: true;
   count: number;
+  page: number;
+  limit: number;
+  hasMore: boolean;
   data: NoticiaTransformada[];
 };
 
@@ -142,7 +149,7 @@ let equiposCache: string[] = [];
 let lastFetchEquipos = 0;
 
 const articleCache = new Map<string, CachedArticle>();
-let newsRefreshPromise: Promise<NewsSnapshotPayload> | null = null;
+const newsRefreshPromises = new Map<string, Promise<NewsSnapshotPayload>>();
 
 /* --------------------------------------------------------------
    FUNCIONES DE AYUDA
@@ -191,6 +198,166 @@ function normalizeReadableText(value: string | null | undefined): string | null 
   const cleaned = value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
 
   return cleaned.length > 0 ? cleaned : null;
+}
+
+function normalizeQueryText(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const cleaned = value.replace(/\s+/g, " ").trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+function parsePageParam(value: unknown): number {
+  const numeric = Number.parseInt(`${value || ""}`, 10);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 1;
+}
+
+function parseLimitParam(value: unknown): number {
+  const numeric = Number.parseInt(`${value || ""}`, 10);
+
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return DEFAULT_NEWS_LIMIT;
+  }
+
+  return Math.min(numeric, MAX_NEWS_LIMIT);
+}
+
+function parseOffsetParam(value: unknown): number | null {
+  const numeric = Number.parseInt(`${value || ""}`, 10);
+
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    return null;
+  }
+
+  return numeric;
+}
+
+function quoteNewsQueryTerm(value: string): string {
+  const cleaned = value.replace(/"/g, "").trim();
+
+  if (!cleaned) {
+    return "";
+  }
+
+  return /\s/u.test(cleaned) ? `"${cleaned}"` : cleaned;
+}
+
+function buildQueryGroup(values: string[]): string | null {
+  const uniqueTerms = Array.from(
+    new Set(
+      values
+        .map((value) => quoteNewsQueryTerm(value))
+        .filter(Boolean),
+    ),
+  );
+
+  if (uniqueTerms.length === 0) {
+    return null;
+  }
+
+  if (uniqueTerms.length === 1) {
+    return uniqueTerms[0];
+  }
+
+  return `(${uniqueTerms.join(" OR ")})`;
+}
+
+function getTeamQueryTerms(team: string): string[] {
+  const normalizedTeam = normalizeComparable(team);
+  const aliases = TEAM_ALIASES[normalizedTeam] || [];
+
+  return Array.from(new Set([team, ...aliases]));
+}
+
+function buildNewsApiQuery(options: { team: string | null; search: string | null }): string {
+  const groups = [
+    buildQueryGroup(["Premier League", "English Premier League", "EPL", "football"]),
+  ];
+
+  if (options.team) {
+    groups.unshift(buildQueryGroup(getTeamQueryTerms(options.team)));
+  }
+
+  if (options.search) {
+    groups.unshift(buildQueryGroup([options.search]));
+  }
+
+  return groups.filter((group): group is string => Boolean(group)).join(" AND ");
+}
+
+function buildNewsCacheKey(options: {
+  offset: number;
+  limit: number;
+  team: string | null;
+  search: string | null;
+}): string {
+  return [
+    NEWS_CACHE_VERSION,
+    `offset=${options.offset}`,
+    `limit=${options.limit}`,
+    `team=${normalizeComparable(options.team || "all")}`,
+    `search=${normalizeComparable(options.search || "")}`,
+  ].join("|");
+}
+
+function buildArticleText(article: NoticiaLimpia): string {
+  return normalizeComparable(
+    [
+      article.title,
+      article.description,
+      article.content,
+      article.sourceName,
+      article.url,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
+}
+
+function matchesSearchTerms(article: NoticiaLimpia, search: string | null): boolean {
+  if (!search) {
+    return true;
+  }
+
+  const haystack = buildArticleText(article);
+  const terms = normalizeComparable(search).split(/\s+/).filter(Boolean);
+
+  if (terms.length === 0) {
+    return true;
+  }
+
+  return terms.every((term) => haystack.includes(term));
+}
+
+function matchesRequestedTeam(article: NoticiaLimpia, team: string | null): boolean {
+  if (!team) {
+    return true;
+  }
+
+  return matchesTeam(buildArticleText(article), team);
+}
+
+function getArticleDedupKey(article: NoticiaLimpia): string {
+  return normalizeComparable(
+    [article.url, article.title, article.publishedAt]
+      .filter(Boolean)
+      .join(" "),
+  );
+}
+
+function getStableArticleId(article: NoticiaLimpia, fallbackIndex: number): number {
+  const seed = getArticleDedupKey(article) || `${fallbackIndex + 1}`;
+  let hash = 2166136261;
+
+  for (const char of seed) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  const stableHash = hash >>> 0;
+  return stableHash === 0 ? fallbackIndex + 1 : stableHash;
 }
 
 /*
@@ -557,6 +724,84 @@ function compareRankedArticles(a: RankedArticle, b: RankedArticle): number {
   return b.score - a.score;
 }
 
+function dedupeRankedArticles(candidates: RankedArticle[]): RankedArticle[] {
+  const seen = new Set<string>();
+
+  return candidates.filter((candidate) => {
+    const dedupKey = getArticleDedupKey(candidate.article);
+
+    if (!dedupKey) {
+      return true;
+    }
+
+    if (seen.has(dedupKey)) {
+      return false;
+    }
+
+    seen.add(dedupKey);
+    return true;
+  });
+}
+
+async function fetchNewsApiPage(
+  options: { team: string | null; search: string | null },
+  page: number,
+): Promise<NewsApiResponse> {
+  const query = encodeURIComponent(buildNewsApiQuery(options));
+  const url =
+    `${NEWS_BASE}/everything?q=${query}` +
+    "&language=es" +
+    "&sortBy=publishedAt" +
+    `&pageSize=${RAW_NEWS_PAGE_SIZE}` +
+    `&page=${page}`;
+
+  return (await fetch(url, {
+    headers: {
+      "X-Api-Key": process.env.NEWS_API_KEY!,
+    },
+  }).then((response) => response.json())) as NewsApiResponse;
+}
+
+async function transformRankedArticles(
+  candidates: RankedArticle[],
+  equipos: string[],
+): Promise<NoticiaTransformada[]> {
+  const sortedCandidates = dedupeRankedArticles([...candidates]).sort(compareRankedArticles);
+  const enrichedCandidates = await enrichCandidates(sortedCandidates);
+
+  return dedupeRankedArticles(enrichedCandidates)
+    .filter((item) => hasEnoughBody(item.article))
+    .sort(compareRankedArticles)
+    .map((item, index) => {
+      const article = item.article;
+      const teams = extractTeams(article, equipos);
+      const summary = buildSummary(article);
+      const content = buildContent(article);
+
+      return {
+        id: getStableArticleId(article, index),
+        title: article.title,
+        headline: buildHeadline(article),
+        summary,
+        content,
+        source: article.sourceName,
+        image: article.image,
+        url: article.url,
+        publishedAt: article.publishedAt,
+        category: "Premier League",
+        readTime: 3,
+        teams,
+        primaryTeam: teams[0] || null,
+      };
+    })
+    .filter(
+      (article) =>
+        Boolean(article.headline) &&
+        Boolean(article.summary) &&
+        Boolean(article.publishedAt),
+    );
+}
+
 function isMissingNewsCacheTable(error: { message?: string; code?: string } | null): boolean {
   const message = `${error?.message || ""}`.toLowerCase();
   return (
@@ -575,7 +820,7 @@ function isCacheExpired(expiresAt: string | null): boolean {
   return Number.isNaN(expirationTime) || expirationTime <= Date.now();
 }
 
-async function readNewsSnapshot(): Promise<{
+async function readNewsSnapshot(cacheKey: string): Promise<{
   payload: NewsSnapshotPayload;
   updatedAt: string | null;
   expiresAt: string | null;
@@ -583,7 +828,7 @@ async function readNewsSnapshot(): Promise<{
   const { data, error } = await supabase
     .from("noticias_cache")
     .select("payload, updated_at, expires_at")
-    .eq("cache_key", NEWS_CACHE_KEY)
+    .eq("cache_key", cacheKey)
     .maybeSingle<CachedNewsRow>();
 
   if (error) {
@@ -605,11 +850,14 @@ async function readNewsSnapshot(): Promise<{
   };
 }
 
-async function persistNewsSnapshot(payload: NewsSnapshotPayload): Promise<void> {
+async function persistNewsSnapshot(
+  cacheKey: string,
+  payload: NewsSnapshotPayload,
+): Promise<void> {
   const now = new Date();
   const { error } = await supabase.from("noticias_cache").upsert(
     {
-      cache_key: NEWS_CACHE_KEY,
+      cache_key: cacheKey,
       payload,
       updated_at: now.toISOString(),
       expires_at: new Date(now.getTime() + NEWS_CACHE_TTL_MS).toISOString(),
@@ -622,96 +870,94 @@ async function persistNewsSnapshot(payload: NewsSnapshotPayload): Promise<void> 
   }
 }
 
-async function buildNewsSnapshot(): Promise<NewsSnapshotPayload> {
+async function buildNewsSnapshot(options: {
+  offset: number;
+  limit: number;
+  team: string | null;
+  search: string | null;
+}): Promise<NewsSnapshotPayload> {
   const equipos = await getEquipos();
+  const requiredResults = options.offset + options.limit + 1;
+  const rankedPool: RankedArticle[] = [];
+  let sourcePage = 1;
+  let sourceHasMore = true;
+  let transformed: NoticiaTransformada[] = [];
 
-  const query = encodeURIComponent(`"Premier League" OR football`);
+  while (sourceHasMore && sourcePage <= MAX_SOURCE_PAGES) {
+    const json = await fetchNewsApiPage(options, sourcePage);
 
-  const url =
-    `${NEWS_BASE}/everything?q=${query}` +
-    "&language=es" +
-    "&sortBy=publishedAt" +
-    "&pageSize=30";
+    if (json.status !== "ok") {
+      throw new Error(json.message || "No se pudieron obtener noticias");
+    }
 
-  const json = (await fetch(url, {
-    headers: {
-      "X-Api-Key": process.env.NEWS_API_KEY!,
-    },
-  }).then((r) => r.json())) as NewsApiResponse;
+    const rankedArticles = (json.articles || [])
+      .map((raw) => {
+        const article = limpiaNoticias(raw);
+        const score = getRelevancia(article, equipos);
 
-  if (json.status !== "ok") {
-    throw new Error(json.message || "No se pudieron obtener noticias");
+        return {
+          article,
+          score,
+        };
+      })
+      .filter((item) => item.score >= MIN_SCORE)
+      .filter((item) => matchesRequestedTeam(item.article, options.team))
+      .filter((item) => matchesSearchTerms(item.article, options.search));
+
+    rankedPool.push(...rankedArticles);
+    transformed = await transformRankedArticles(rankedPool, equipos);
+
+    const reachedRequestedPage = transformed.length >= requiredResults;
+    const totalResults = typeof json.totalResults === "number" ? json.totalResults : null;
+    sourceHasMore =
+      (json.articles || []).length === RAW_NEWS_PAGE_SIZE &&
+      (totalResults === null || sourcePage * RAW_NEWS_PAGE_SIZE < totalResults);
+
+    if (reachedRequestedPage) {
+      break;
+    }
+
+    sourcePage += 1;
   }
 
-  const rankedArticles: RankedArticle[] = (json.articles || [])
-    .map((raw) => {
-      const article = limpiaNoticias(raw);
-      const score = getRelevancia(article, equipos);
-
-      return {
-        article,
-        score,
-      };
-    })
-    .filter((item) => item.score >= MIN_SCORE)
-    .sort(compareRankedArticles);
-
-  const filtradas = (await enrichCandidates(rankedArticles))
-    .filter((item) => hasEnoughBody(item.article))
-    .sort(compareRankedArticles)
-    .slice(0, MAX_NEWS_RESULTS)
-    .map((item) => item.article);
-
-  const transformed: NoticiaTransformada[] = filtradas
-    .map((article, index) => {
-      const teams = extractTeams(article, equipos);
-      const summary = buildSummary(article);
-      const content = buildContent(article);
-
-      return {
-        id: index + 1,
-        title: article.title,
-        headline: buildHeadline(article),
-        summary,
-        content,
-        source: article.sourceName,
-        image: article.image,
-        url: article.url,
-        publishedAt: article.publishedAt,
-        category: "Premier League",
-        readTime: 3,
-        teams,
-        primaryTeam: teams[0] || null,
-      };
-    })
-    .filter(
-      (article) =>
-        Boolean(article.headline) &&
-        Boolean(article.summary) &&
-        Boolean(article.publishedAt),
-    );
+  const pageItems = transformed.slice(options.offset, options.offset + options.limit);
+  const canFetchMoreFromSource = sourceHasMore && sourcePage <= MAX_SOURCE_PAGES;
 
   return {
     success: true,
-    count: transformed.length,
-    data: transformed,
+    count: pageItems.length,
+    page: Math.floor(options.offset / Math.max(1, options.limit)) + 1,
+    limit: options.limit,
+    hasMore: transformed.length > options.offset + options.limit || canFetchMoreFromSource,
+    data: pageItems,
   };
 }
 
-async function refreshNewsSnapshot(): Promise<NewsSnapshotPayload> {
-  if (newsRefreshPromise) {
-    return newsRefreshPromise;
+async function refreshNewsSnapshot(
+  cacheKey: string,
+  options: {
+    offset: number;
+    limit: number;
+    team: string | null;
+    search: string | null;
+  },
+): Promise<NewsSnapshotPayload> {
+  const pendingRefresh = newsRefreshPromises.get(cacheKey);
+
+  if (pendingRefresh) {
+    return pendingRefresh;
   }
 
-  newsRefreshPromise = (async () => {
-    const payload = await buildNewsSnapshot();
-    await persistNewsSnapshot(payload);
+  const refreshPromise = (async () => {
+    const payload = await buildNewsSnapshot(options);
+    await persistNewsSnapshot(cacheKey, payload);
     return payload;
   })().finally(() => {
-    newsRefreshPromise = null;
+    newsRefreshPromises.delete(cacheKey);
   });
 
-  return newsRefreshPromise;
+  newsRefreshPromises.set(cacheKey, refreshPromise);
+  return refreshPromise;
 }
 
 /* --------------------------------------------------------------
@@ -727,17 +973,27 @@ flujo general:
 - enriquece candidatos con scraping si hace falta
 - transforma la respuesta al formato que usa el frontend
 */
-router.get("/", async (_req: Request, res: Response) => {
+router.get("/", async (req: Request, res: Response) => {
+  const limit = parseLimitParam(req.query.limit);
+  const page = parsePageParam(req.query.page);
+  const explicitOffset = parseOffsetParam(req.query.offset);
+  const options = {
+    offset: explicitOffset ?? (page - 1) * limit,
+    limit,
+    team: normalizeQueryText(req.query.team),
+    search: normalizeQueryText(req.query.search),
+  };
+  const cacheKey = buildNewsCacheKey(options);
   let cachedSnapshot: Awaited<ReturnType<typeof readNewsSnapshot>> = null;
 
   try {
-    cachedSnapshot = await readNewsSnapshot();
+    cachedSnapshot = await readNewsSnapshot(cacheKey);
 
-    if (cachedSnapshot?.payload.data.length) {
+    if (cachedSnapshot?.payload) {
       const stale = isCacheExpired(cachedSnapshot.expiresAt);
 
       if (stale) {
-        void refreshNewsSnapshot().catch((refreshError) => {
+        void refreshNewsSnapshot(cacheKey, options).catch((refreshError) => {
           console.error("[api/noticias] Error refrescando cache en segundo plano:", refreshError);
         });
       }
@@ -750,7 +1006,7 @@ router.get("/", async (_req: Request, res: Response) => {
       });
     }
 
-    const freshSnapshot = await refreshNewsSnapshot();
+    const freshSnapshot = await refreshNewsSnapshot(cacheKey, options);
 
     return res.json({
       ...freshSnapshot,
@@ -759,7 +1015,7 @@ router.get("/", async (_req: Request, res: Response) => {
       cachedAt: new Date().toISOString(),
     });
   } catch (error: unknown) {
-    if (cachedSnapshot?.payload.data.length) {
+    if (cachedSnapshot?.payload) {
       return res.json({
         ...cachedSnapshot.payload,
         cached: true,
