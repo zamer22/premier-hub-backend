@@ -412,7 +412,8 @@ async function getEquipos(): Promise<string[]> {
     return equiposCache;
   }
 
-  const json = (await fetch("http://localhost:4000/api/partidos/equipos").then((r) =>
+  const port = process.env.PORT || 4000;
+  const json = (await fetch(`http://localhost:${port}/api/partidos/equipos`).then((r) =>
     r.json(),
   )) as EquiposResponse;
 
