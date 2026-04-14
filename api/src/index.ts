@@ -19,7 +19,6 @@ const app = express();
 const PORT = Number(process.env.PORT) || 4000;
 const IS_PROD = process.env.NODE_ENV === "production";
 
-/* ── Middleware ── */
 app.use(
   cors({
     origin: IS_PROD ? process.env.CORS_ORIGIN : "http://localhost:5173",
@@ -30,7 +29,6 @@ app.use(
 app.use(cookieParser(process.env.COOKIE_SECRET));
 app.use(express.json());
 
-/* ── Rutas ── */
 app.use("/api/auth", authRouter);
 app.use("/api/ranking", rankingRouter);
 app.use("/api/simulador", simuladorRouter);
@@ -40,12 +38,10 @@ app.use("/api/noticias", noticiasRouter);
 app.use("/api/tienda", tiendaRouter);
 app.use("/api/marketplace", marketplaceRouter);
 
-/* ── Health check ── */
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
 });
 
-/* ── Auto-sync opcional al arrancar ── */
 const DEFAULT_FIXTURE_ID = Number(process.env.LIVE_FIXTURE_ID);
 
 if (DEFAULT_FIXTURE_ID && !Number.isNaN(DEFAULT_FIXTURE_ID)) {
@@ -53,7 +49,6 @@ if (DEFAULT_FIXTURE_ID && !Number.isNaN(DEFAULT_FIXTURE_ID)) {
   console.log(`[index] Auto-sync inicial activado para fixture ${DEFAULT_FIXTURE_ID}`);
 }
 
-/* ── Start server ── */
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`API corriendo en puerto ${PORT}`);
 });
