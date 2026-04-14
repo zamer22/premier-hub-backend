@@ -8,10 +8,14 @@
   },
   "dependencies": {
 <<<<<<< HEAD
+<<<<<<< HEAD
     "@mozilla/readability": "^0.6.0",
 =======
     "@supabase/supabase-js": "^2.103.0",
 >>>>>>> emilio
+=======
+    "@mozilla/readability": "^0.6.0",
+>>>>>>> 1086f9aa1cf8bfef59ed033d686f13d9614f95bb
     "@supabase/supabase-js": "^2.45.0",
     "@types/cookie-parser": "^1.4.10",
     "@types/dotenv": "^6.1.1",
