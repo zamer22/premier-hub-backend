@@ -25,7 +25,7 @@ jobs:
       - name: Update versions.env
         run: |
           cd /home/zamer/premier-hub-infra
-          git pull origin main
+          git pull --rebase origin main
           sed -i 's/^PREPROD_BACKEND_TAG=.*/PREPROD_BACKEND_TAG=${{ github.sha }}/' versions.env
           git add versions.env
           git commit -m "deploy: backend preprod → ${{ github.sha }}" || true
