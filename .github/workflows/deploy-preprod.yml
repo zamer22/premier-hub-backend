@@ -1,0 +1,32 @@
+name: Build and Deploy Backend (preprod)
+
+on:
+  push:
+    branches: [preprod]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: |
+          docker build -t premier-api:${{ github.sha }} -t premier-api:preprod ./api
+          docker save premier-api:${{ github.sha }} | sudo k3s ctr images import -
+
+      - name: Deploy to K3s
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/zamer22/premier-hub-infra/main/k8s/preprod/api-deployment.yaml
+          kubectl apply -f https://raw.githubusercontent.com/zamer22/premier-hub-infra/main/k8s/preprod/api-service.yaml
+          kubectl set image deployment/api api=premier-api:${{ github.sha }} -n preprod
+          kubectl rollout status deployment/api -n preprod --timeout=120s
+
+      - name: Update versions.env
+        run: |
+          cd /home/zamer/premier-hub-infra
+          git pull origin main
+          sed -i 's/^PREPROD_BACKEND_TAG=.*/PREPROD_BACKEND_TAG=${{ github.sha }}/' versions.env
+          git add versions.env
+          git commit -m "deploy: backend preprod → ${{ github.sha }}" || true
+          git push
