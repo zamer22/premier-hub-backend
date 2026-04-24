@@ -29,4 +29,4 @@ jobs:
           sed -i 's/^PREPROD_BACKEND_TAG=.*/PREPROD_BACKEND_TAG=${{ github.sha }}/' versions.env
           git add versions.env
           git commit -m "deploy: backend preprod → ${{ github.sha }}" || true
-          git push
+          git push origin HEAD:main
