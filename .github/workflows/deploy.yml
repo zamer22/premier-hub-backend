@@ -17,8 +17,6 @@ jobs:
 
       - name: Deploy to K3s
         run: |
-          kubectl apply -f https://raw.githubusercontent.com/zamer22/premier-hub-infra/main/k8s/prod/api-deployment.yaml
-          kubectl apply -f https://raw.githubusercontent.com/zamer22/premier-hub-infra/main/k8s/prod/api-service.yaml
           kubectl set image deployment/api api=premier-api:${{ github.sha }} -n prod
           kubectl rollout status deployment/api -n prod --timeout=120s
 
