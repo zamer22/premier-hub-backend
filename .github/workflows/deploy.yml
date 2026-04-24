@@ -22,11 +22,3 @@ jobs:
           kubectl set image deployment/api api=premier-api:${{ github.sha }} -n prod
           kubectl rollout status deployment/api -n prod --timeout=120s
 
-      - name: Update versions.env
-        run: |
-          cd /home/zamer/premier-hub-infra
-          git pull --rebase origin main
-          sed -i 's/^PROD_BACKEND_TAG=.*/PROD_BACKEND_TAG=${{ github.sha }}/' versions.env
-          git add versions.env
-          git commit -m "deploy: backend prod → ${{ github.sha }}" || true
-          git push origin HEAD:main
