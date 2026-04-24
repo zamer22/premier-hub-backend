@@ -4,10 +4,10 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const APIFOOTBALL_KEY = process.env.APIFOOTBALL_KEY;
-const APIFOOTBALL_BASE = "https://v3.football.api-sports.io";
+const APIFOOTBALL_BASE = process.env.APIFOOTBALL_BASE_URL || "https://v3.football.api-sports.io";
 
-export const PL_LEAGUE = 39;
-export const PL_SEASON = 2025;
+export const PL_LEAGUE = Number(process.env.APIFOOTBALL_LEAGUE_ID) || 39;
+export const PL_SEASON = Number(process.env.APIFOOTBALL_SEASON) || 2025;
 
 if (!APIFOOTBALL_KEY) {
   throw new Error("Falta la variable de entorno APIFOOTBALL_KEY");

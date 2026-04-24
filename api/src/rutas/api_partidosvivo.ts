@@ -2,9 +2,9 @@ import { Router, Request, Response } from "express";
 
 const router = Router();
 
-const BASE = "https://v3.football.api-sports.io";
-const LEAGUE = 39;
-const SEASON = 2025;
+const BASE = process.env.APIFOOTBALL_BASE_URL || "https://v3.football.api-sports.io";
+const LEAGUE = Number(process.env.APIFOOTBALL_LEAGUE_ID) || 39;
+const SEASON = Number(process.env.APIFOOTBALL_SEASON) || 2025;
 
 function getHeaders() {
   if (!process.env.APIFOOTBALL_KEY) {
