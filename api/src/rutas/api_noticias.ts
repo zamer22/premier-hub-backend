@@ -5,7 +5,7 @@ import supabase from "../db";
 
 const router = Router();
 
-const NEWS_BASE = "https://newsapi.org/v2";
+const NEWS_BASE = process.env.NEWS_BASE_URL || "https://newsapi.org/v2";
 
 const PREMIER_LEAGUE = [
   "premier league",
