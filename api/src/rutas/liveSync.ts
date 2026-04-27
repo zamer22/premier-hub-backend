@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { Router } from "express";
 import type { Request, Response } from "express";
 
-import { footballFetch } from "./apifootball";
+import { footballFetch } from "./api_partidos";
 
 if (!process.env.SUPABASE_URL) {
   throw new Error("Falta SUPABASE_URL en el archivo .env");
