@@ -1,20 +1,39 @@
-import { Router, Request, Response } from "express";
+import { Router } from "express";
+import type { Request, Response } from "express";
 import { Readability } from "@mozilla/readability";
 import { JSDOM, VirtualConsole } from "jsdom";
+
 import supabase from "../db";
 
 const router = Router();
 
-const NEWS_BASE = "https://newsapi.org/v2";
+const NEWS_BASE_URL = "https://newsapi.org/v2";
+const TEAM_CACHE_MS = 24 * 60 * 60 * 1000; // 24 horas
+const ARTICLE_CACHE_MS = 6 * 60 * 60 * 1000; // 6 horas
+const SCRAPE_TIMEOUT_MS = 8000; // 8 segundos
+const SCRAPE_CANDIDATES_LIMIT = 16; // Limite de artículos a enriquecer con scraping para mejorar el rendimiento general
+const RAW_NEWS_PAGE_SIZE = 25; // Máximo permitido por NewsAPI :(
+const MAX_SOURCE_PAGES = 4;
+const DEFAULT_NEWS_LIMIT = 8; // Límite predeterminado de noticias por página
+const MAX_NEWS_LIMIT = 12; // Límite máximo de noticias por página, 12 por no acabarme el API
+const MIN_RELEVANCE_SCORE = 3; // Puntuación mínima para considerar una noticia relevante
+const NEWS_CACHE_VERSION = "v2";
+const NEWS_CACHE_TTL_MS = 1000 * 60 * 20; // 20 minutos
+const SCRAPE_VIRTUAL_CONSOLE = new VirtualConsole(); // Evita que JSDOM imprima warnings o errores de scripts al hacer scraping de artículos
 
-const PREMIER_LEAGUE = [
+/*
+-----------------------------------------------------------------------------------
+Keywords, las usamos para encontrar noticias relevantes y puntuarlas para decidir cuáles mostrar. 
+-----------------------------------------------------------------------------------
+*/
+const PREMIER_LEAGUE_KEYWORDS = [
   "premier league",
   "english premier league",
   "epl",
   "premierleague",
 ];
 
-const KEYWORDS = [
+const RELEVANT_NEWS_KEYWORDS = [
   "transferencia",
   "lesion",
   "manager",
@@ -24,20 +43,33 @@ const KEYWORDS = [
   "suspension",
 ];
 
-const CACHE_EQUIPOS_MS = 1000 * 60 * 60 * 24;
-const ARTICLE_CACHE_MS = 1000 * 60 * 60 * 6;
-const SCRAPE_TIMEOUT_MS = 8000;
-const SCRAPE_CANDIDATES = 16;
-const RAW_NEWS_PAGE_SIZE = 25;
-const MAX_SOURCE_PAGES = 4;
-const DEFAULT_NEWS_LIMIT = 8;
-const MAX_NEWS_LIMIT = 12;
-const SCRAPE_VIRTUAL_CONSOLE = new VirtualConsole();
-const MIN_SCORE = 3;
-const NEWS_CACHE_VERSION = "v2";
-const NEWS_CACHE_TTL_MS =
-  1000 * 60 * (Number(process.env.NEWS_CACHE_TTL_MINUTES) || 20);
+const TEAM_ALIASES: Record<string, string[]> = {
+  arsenal: ["gunners"],
+  astonvilla: ["villa"],
+  bournemouth: ["afc bournemouth", "cherries"],
+  brighton: ["brighton & hove albion", "brighton and hove albion", "seagulls"],
+  brentford: ["bees"],
+  chelsea: ["blues"],
+  crystalpalace: ["eagles"],
+  everton: ["toffees"],
+  fulham: ["cottagers"],
+  ipswich: ["ipswich town"],
+  leicester: ["leicester city", "foxes"],
+  manchestercity: ["man city", "citizens"],
+  manchesterunited: ["man united", "man utd", "red devils"],
+  newcastle: ["newcastle united", "magpies"],
+  nottinghamforest: ["forest"],
+  southampton: ["saints"],
+  tottenham: ["tottenham hotspur", "spurs"],
+  westham: ["west ham united", "hammers"],
+  wolverhamptonwanderers: ["wolves", "wolverhampton"],
+};
 
+/* 
+--------------------------------------------------------------------------------
+Tipos e interfaces para las noticias
+--------------------------------------------------------------------------------
+*/
 type EquiposResponse = {
   data?: string[];
 };
@@ -119,46 +151,33 @@ type CachedNewsRow = {
   expires_at: string | null;
 };
 
-const TEAM_ALIASES: Record<string, string[]> = {
-  arsenal: ["gunners"],
-  "aston villa": ["villa"],
-  bournemouth: ["afc bournemouth", "cherries"],
-  brighton: ["brighton & hove albion", "brighton and hove albion", "seagulls"],
-  brentford: ["bees"],
-  chelsea: ["blues"],
-  "crystal palace": ["eagles"],
-  everton: ["toffees"],
-  fulham: ["cottagers"],
-  ipswich: ["ipswich town"],
-  leicester: ["leicester city", "foxes"],
-  "manchester city": ["man city", "citizens"],
-  "manchester united": ["man united", "man utd", "red devils"],
-  newcastle: ["newcastle united", "magpies"],
-  "nottingham forest": ["forest"],
-  southampton: ["saints"],
-  tottenham: ["tottenham hotspur", "spurs"],
-  "west ham": ["west ham united", "hammers"],
-  "wolverhampton wanderers": ["wolves", "wolverhampton"],
+type NewsQuery = {
+  limit?: unknown;
+  page?: unknown;
+  offset?: unknown;
+  team?: unknown;
+  search?: unknown;
 };
 
-/* --------------------------------------------------------------
-   CACHE EN MEMORIA
---------------------------------------------------------------- */
+type NewsRouteOptions = {
+  offset: number;
+  limit: number;
+  team: string | null;
+  search: string | null;
+};
 
+/* 
+--------------------------------------------------------------------------------
+Funciones auxiliares
+--------------------------------------------------------------------------------
+*/
 let equiposCache: string[] = [];
-let lastFetchEquipos = 0;
-
+let lastEquiposFetchAt = 0;
 const articleCache = new Map<string, CachedArticle>();
-const newsRefreshPromises = new Map<string, Promise<NewsSnapshotPayload>>();
+const pendingRefreshes = new Map<string, Promise<NewsSnapshotPayload>>();
 
-/* --------------------------------------------------------------
-   FUNCIONES DE AYUDA
---------------------------------------------------------------- */
-
-/*
-funcion para normalizar texto y poder comparar cadenas sin que afecten
-mayusculas, acentos, signos o espacios repetidos
-retorna: texto limpio y comparable
+/* 
+function normalizeComparable: Normaliza un texto para comparaciones, eliminando acentos, caracteres especiales y convirtiendo a minúsculas.
 */
 function normalizeComparable(value: string): string {
   return value
@@ -171,8 +190,16 @@ function normalizeComparable(value: string): string {
 }
 
 /*
-funcion para recortar texto sin cortarlo tan feo a la mitad
-retorna: texto original o texto acortado con "..."
+function shortenText: Acorta un texto a una longitud máxima, intentando cortar en un espacio para no truncar palabras.
+Parámetros:
+- value: string - El texto a acortar.
+- maxLength: number - La longitud máxima permitida para el texto acortado.
+Returns:
+- string - El texto acortado, con "..." al final si se recorto.
+Descripción:
+Esta función verifica si el texto excede la longitud máxima permitida. 
+Si es así, intenta cortar el texto en el último espacio antes del límite para evitar truncar palabras. 
+Si no encuentra un espacio adecuado, corta directamente en el límite. Luego agrega "..." al final para indicar que el texto ha sido truncado.
 */
 function shortenText(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
@@ -187,19 +214,39 @@ function shortenText(value: string, maxLength: number): string {
 }
 
 /*
-funcion para limpiar texto legible obtenido del api o del scraping
-retorna: string limpio o null si no hay contenido util
+function normalizeReadableText: Limpia y normaliza un texto para ser mostrado, eliminando espacios extra y caracteres no imprimibles.
+Parámetros:
+- value: string | null | undefined - El texto a normalizar, que puede ser una cadena, null o undefined.
+Returns:
+- string | null - El texto normalizado, o null si el resultado es una cadena vacía o el valor original era null/undefined.
+Descripción:
+Esta función reemplaza los espacios en blanco no separables por espacios normales, 
+colapsa múltiples espacios en uno solo y recorta los espacios al inicio y al final del texto.
 */
-function normalizeReadableText(value: string | null | undefined): string | null {
+function normalizeReadableText(
+  value: string | null | undefined,
+): string | null {
   if (!value) {
     return null;
   }
 
-  const cleaned = value.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-
+  const cleaned = value
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   return cleaned.length > 0 ? cleaned : null;
 }
 
+/*
+function normalizeQueryText: Normaliza un texto de consulta, eliminando espacios extra y asegurando que sea una cadena válida.
+Parámetros:
+- value: unknown - El valor a normalizar, que puede ser de cualquier tipo.
+Returns:
+- string | null - El texto normalizado, o null si el valor no es una cadena o el resultado es una cadena vacía.
+Descripción:
+Esta función verifica si el valor es una cadena. Si no lo es, retorna null. La diferencia con normalizeReadableText es que esta función no reemplaza los espacios no separables, 
+para preservar la intención de búsqueda del usuario (por ejemplo, "manchester united" vs "manchesterunited").
+*/
 function normalizeQueryText(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -209,31 +256,63 @@ function normalizeQueryText(value: unknown): string | null {
   return cleaned.length > 0 ? cleaned : null;
 }
 
-function parsePageParam(value: unknown): number {
-  const numeric = Number.parseInt(`${value || ""}`, 10);
-  return Number.isFinite(numeric) && numeric > 0 ? numeric : 1;
+/*
+function parseNumber: Función auxiliar para parsear números de parámetros de consulta, con valor por defecto.
+Parámetros:
+- value: string | undefined - El valor a parsear, que puede ser una cadena o undefined.
+- fallback: number - El valor numérico a retornar si el parseo falla o el valor es undefined.
+Returns:
+- number - El valor numérico parseado, o el valor de fallback si el parseo no es exitoso.
+Descripción:
+Esta función intenta convertir una cadena a un número. Si el valor es undefined o no se puede convertir a un número válido, 
+retorna el valor de fallback proporcionado. Se usa principalmente para parsear parámetros de consulta como "limit" o "page" que deben ser números, 
+pero pueden venir como cadenas o no estar presentes.
+*/
+function parsePositiveInteger(value: unknown, fallback: number): number {
+  const parsedValue = Number.parseInt(`${value || ""}`, 10);
+  return Number.isFinite(parsedValue) && parsedValue > 0
+    ? parsedValue
+    : fallback;
 }
 
-function parseLimitParam(value: unknown): number {
-  const numeric = Number.parseInt(`${value || ""}`, 10);
-
-  if (!Number.isFinite(numeric) || numeric <= 0) {
-    return DEFAULT_NEWS_LIMIT;
-  }
-
-  return Math.min(numeric, MAX_NEWS_LIMIT);
-}
-
-function parseOffsetParam(value: unknown): number | null {
-  const numeric = Number.parseInt(`${value || ""}`, 10);
-
-  if (!Number.isFinite(numeric) || numeric < 0) {
+/*
+function parseNonNegativeInteger: Similar a parsePositiveInteger pero permite cero como valor válido. 
+Se usa para parámetros como "offset" que pueden ser cero o un número positivo.
+*/
+function parseNonNegativeInteger(value: unknown): number | null {
+  const parsedValue = Number.parseInt(`${value || ""}`, 10);
+  if (!Number.isFinite(parsedValue) || parsedValue < 0) {
     return null;
   }
-
-  return numeric;
+  return parsedValue;
 }
 
+/*
+function parseLimitParam: Función específica para parsear el parámetro "limit" de la consulta, aplicando un límite máximo para evitar solicitudes excesivas.
+Parámetros:
+- value: unknown - El valor del parámetro "limit" a parsear, que puede ser de cualquier tipo.
+Returns:
+- number - El valor numérico parseado para "limit", con un valor predeterminado y un límite máximo aplicado.
+Descripción:
+Esta función utiliza parsePositiveInteger para convertir el valor a un número entero positivo, con un valor predeterminado de DEFAULT_NEWS_LIMIT.
+Luego, aplica un límite máximo de MAX_NEWS_LIMIT para evitar que el cliente solicite demasiadas noticias en una sola petición, 
+lo que podría afectar el rendimiento.
+*/
+function parseLimitParam(value: unknown): number {
+  const parsedValue = parsePositiveInteger(value, DEFAULT_NEWS_LIMIT);
+  return Math.min(parsedValue, MAX_NEWS_LIMIT);
+}
+
+/*
+function quoteNewsQueryTerm: Función auxiliar para citar términos de búsqueda en la API de noticias.
+Parámetros:
+- value: string - El término de búsqueda a citar.
+Returns:
+- string - El término de búsqueda citado, o una cadena vacía si el valor no es válido.
+Descripción:
+Esta función elimina las comillas dobles del valor y trimea el resultado. Si el resultado es una cadena vacía, retorna una cadena vacía.
+De lo contrario, si el término contiene espacios, lo envuelve en comillas dobles para preservar su integridad en la consulta.
+*/
 function quoteNewsQueryTerm(value: string): string {
   const cleaned = value.replace(/"/g, "").trim();
 
@@ -244,13 +323,19 @@ function quoteNewsQueryTerm(value: string): string {
   return /\s/u.test(cleaned) ? `"${cleaned}"` : cleaned;
 }
 
+/*
+function buildQueryGroup: Función auxiliar para construir grupos de términos de búsqueda en la API de noticias.
+Parámetros:
+- values: string[] - Un array de términos de búsqueda.
+Returns:
+- string | null - El grupo de términos de búsqueda construido, o null si no hay términos válidos.
+Descripción:
+Esta función toma un array de términos de búsqueda y los procesa para crear un grupo válido. 
+Elimina los términos duplicados y vacíos, y los envuelve en comillas dobles si contienen espacios.
+*/
 function buildQueryGroup(values: string[]): string | null {
   const uniqueTerms = Array.from(
-    new Set(
-      values
-        .map((value) => quoteNewsQueryTerm(value))
-        .filter(Boolean),
-    ),
+    new Set(values.map((value) => quoteNewsQueryTerm(value)).filter(Boolean)),
   );
 
   if (uniqueTerms.length === 0) {
@@ -264,16 +349,42 @@ function buildQueryGroup(values: string[]): string | null {
   return `(${uniqueTerms.join(" OR ")})`;
 }
 
+/*
+function getTeamQueryTerms: Función auxiliar para obtener los términos de búsqueda asociados a un equipo específico.
+Parámetros:
+- team: string - El nombre del equipo para el cual obtener términos de búsqueda.
+Returns:
+- string[] - Un array de términos de búsqueda asociados al equipo.
+Descripción:
+Esta función normaliza el nombre del equipo y obtiene sus alias, devolviendo un array con todos los términos válidos.
+*/
 function getTeamQueryTerms(team: string): string[] {
   const normalizedTeam = normalizeComparable(team);
   const aliases = TEAM_ALIASES[normalizedTeam] || [];
-
   return Array.from(new Set([team, ...aliases]));
 }
 
-function buildNewsApiQuery(options: { team: string | null; search: string | null }): string {
+/*
+function buildNewsApiQuery: Función para construir la consulta API de noticias basada en las opciones proporcionadas.
+Parámetros:
+- options: { team: string | null; search: string | null } - Las opciones para construir la consulta.
+Returns:
+- string - La consulta API de noticias construida.
+Descripción:
+Esta función construye una consulta API de noticias combinando grupos de términos de búsqueda,
+incluyendo términos específicos del equipo y términos de búsqueda generales.
+*/
+function buildNewsApiQuery(options: {
+  team: string | null;
+  search: string | null;
+}): string {
   const groups = [
-    buildQueryGroup(["Premier League", "English Premier League", "EPL", "football"]),
+    buildQueryGroup([
+      "Premier League",
+      "English Premier League",
+      "EPL",
+      "football",
+    ]),
   ];
 
   if (options.team) {
@@ -284,15 +395,21 @@ function buildNewsApiQuery(options: { team: string | null; search: string | null
     groups.unshift(buildQueryGroup([options.search]));
   }
 
-  return groups.filter((group): group is string => Boolean(group)).join(" AND ");
+  return groups
+    .filter((group): group is string => Boolean(group))
+    .join(" AND ");
 }
 
-function buildNewsCacheKey(options: {
-  offset: number;
-  limit: number;
-  team: string | null;
-  search: string | null;
-}): string {
+/*
+function buildNewsCacheKey: Función para construir la clave de caché para la API de noticias basada en las opciones proporcionadas.
+Parámetros:
+- options: NewsRouteOptions - Las opciones para construir la clave de caché.
+Returns:
+- string - La clave de caché construida.
+Descripción:
+Esta función construye una clave de caché única para cada combinación de opciones proporcionadas.
+*/
+function buildNewsCacheKey(options: NewsRouteOptions): string {
   return [
     NEWS_CACHE_VERSION,
     `offset=${options.offset}`,
@@ -302,7 +419,16 @@ function buildNewsCacheKey(options: {
   ].join("|");
 }
 
-function buildArticleText(article: NoticiaLimpia): string {
+/*
+function buildArticleSearchText: Función para construir el texto de búsqueda para un artículo de noticias.
+Parámetros:
+- article: NoticiaLimpia - El artículo de noticias para el cual construir el texto de búsqueda.
+Returns:
+- string - El texto de búsqueda construido.
+Descripción:
+Esta función normaliza los campos del artículo y los une en un solo string para facilitar la búsqueda.
+*/
+function buildArticleSearchText(article: NoticiaLimpia): string {
   return normalizeComparable(
     [
       article.title,
@@ -316,12 +442,25 @@ function buildArticleText(article: NoticiaLimpia): string {
   );
 }
 
-function matchesSearchTerms(article: NoticiaLimpia, search: string | null): boolean {
+/*
+function matchesSearchTerms: Función para verificar si un artículo de noticias coincide con los términos de búsqueda.
+Parámetros:
+- article: NoticiaLimpia - El artículo de noticias para el cual verificar la coincidencia.
+- search: string | null - Los términos de búsqueda.
+Returns:
+- boolean - true si el artículo coincide con los términos de búsqueda, false en caso contrario.
+Descripción:
+Esta función verifica si el texto de búsqueda coincide con los campos del artículo.
+*/
+function matchesSearchTerms(
+  article: NoticiaLimpia,
+  search: string | null,
+): boolean {
   if (!search) {
     return true;
   }
 
-  const haystack = buildArticleText(article);
+  const haystack = buildArticleSearchText(article);
   const terms = normalizeComparable(search).split(/\s+/).filter(Boolean);
 
   if (terms.length === 0) {
@@ -331,39 +470,14 @@ function matchesSearchTerms(article: NoticiaLimpia, search: string | null): bool
   return terms.every((term) => haystack.includes(term));
 }
 
-function matchesRequestedTeam(article: NoticiaLimpia, team: string | null): boolean {
-  if (!team) {
-    return true;
-  }
-
-  return matchesTeam(buildArticleText(article), team);
-}
-
-function getArticleDedupKey(article: NoticiaLimpia): string {
-  return normalizeComparable(
-    [article.url, article.title, article.publishedAt]
-      .filter(Boolean)
-      .join(" "),
-  );
-}
-
-function getStableArticleId(article: NoticiaLimpia, fallbackIndex: number): number {
-  const seed = getArticleDedupKey(article) || `${fallbackIndex + 1}`;
-  let hash = 2166136261;
-
-  for (const char of seed) {
-    hash ^= char.charCodeAt(0);
-    hash = Math.imul(hash, 16777619);
-  }
-
-  const stableHash = hash >>> 0;
-  return stableHash === 0 ? fallbackIndex + 1 : stableHash;
-}
-
 /*
-funcion para obtener las variantes o aliases de un equipo
-ejemplo: "manchester city" tambien puede matchear con "man city"
-retorna: lista unica de patrones normalizados
+function getTeamPatterns: Función para obtener los patrones de búsqueda para un equipo específico.
+Parámetros:
+- team: string - El nombre del equipo.
+Returns:
+- string[] - Un array de patrones de búsqueda.
+Descripción:
+Esta función normaliza el nombre del equipo y obtiene sus alias, devolviendo un array de strings para usar en la búsqueda.
 */
 function getTeamPatterns(team: string): string[] {
   const normalizedTeam = normalizeComparable(team);
@@ -379,8 +493,14 @@ function getTeamPatterns(team: string): string[] {
 }
 
 /*
-funcion para revisar si un texto menciona a cierto equipo
-retorna: true si encuentra el equipo o alguno de sus aliases
+function matchesTeam: Función para verificar si un texto coincide con los patrones de búsqueda para un equipo específico.
+Parámetros:
+- text: string - El texto para el cual verificar la coincidencia.
+- team: string - El nombre del equipo.
+Returns:
+- boolean - true si el texto coincide con los patrones de búsqueda, false en caso contrario.
+Descripción:
+Esta función utiliza los patrones de búsqueda obtenidos para el equipo y verifica si alguno coincide con el texto proporcionado.
 */
 function matchesTeam(text: string, team: string): boolean {
   return getTeamPatterns(team).some((pattern) => {
@@ -390,8 +510,76 @@ function matchesTeam(text: string, team: string): boolean {
 }
 
 /*
-funcion para extraer que equipos aparecen mencionados dentro de una noticia
-retorna: lista de equipos detectados
+function matchesRequestedTeam: Función para verificar si un artículo de noticias coincide con el equipo solicitado.
+Parámetros:
+- article: NoticiaLimpia - El artículo de noticias para el cual verificar la coincidencia.
+- team: string | null - El nombre del equipo.
+Returns:
+- boolean - true si el artículo coincide con el equipo solicitado, false en caso contrario.
+Descripción:
+Esta función verifica si el texto de búsqueda del artículo coincide con los patrones de búsqueda para el equipo solicitado.
+*/
+function matchesRequestedTeam(
+  article: NoticiaLimpia,
+  team: string | null,
+): boolean {
+  if (!team) {
+    return true;
+  }
+
+  return matchesTeam(buildArticleSearchText(article), team);
+}
+
+/*
+function getArticleDedupKey: Función para obtener una clave única para deduplicar artículos.
+Parámetros:
+- article: NoticiaLimpia - El artículo de noticias para el cual obtener la clave.
+Returns:
+- string - La clave única para el artículo.
+Descripción:
+Esta función normaliza los campos del artículo y los une para crear una clave única.
+*/
+function getArticleDedupKey(article: NoticiaLimpia): string {
+  return normalizeComparable(
+    [article.url, article.title, article.publishedAt].filter(Boolean).join(" "),
+  );
+}
+
+/*
+function getStableArticleId: Función para obtener un ID estable para un artículo de noticias.
+Parámetros:
+- article: NoticiaLimpia - El artículo de noticias para el cual obtener el ID.
+- fallbackIndex: number - El índice de reserva para generar un ID en caso de no poder obtener uno estable.
+Returns:
+- number - El ID estable para el artículo.
+Descripción:
+Esta función utiliza la clave única del artículo para generar un ID estable basado en un algoritmo de hash.
+*/
+function getStableArticleId(
+  article: NoticiaLimpia,
+  fallbackIndex: number,
+): number {
+  const seed = getArticleDedupKey(article) || `${fallbackIndex + 1}`;
+  let hash = 2166136261;
+
+  for (const char of seed) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  const stableHash = hash >>> 0;
+  return stableHash === 0 ? fallbackIndex + 1 : stableHash;
+}
+
+/*
+function extractTeams: Función para extraer los equipos mencionados en un artículo de noticias.
+Parámetros:
+- article: NoticiaLimpia - El artículo de noticias para el cual extraer los equipos.
+- equipos: string[] - La lista de equipos para buscar.
+Returns:
+- string[] - La lista de equipos encontrados en el artículo.
+Descripción:
+Esta función normaliza el texto del artículo y verifica si contiene alguno de los nombres de los equipos.
 */
 function extractTeams(article: NoticiaLimpia, equipos: string[]): string[] {
   const text = normalizeComparable(
@@ -404,8 +592,13 @@ function extractTeams(article: NoticiaLimpia, equipos: string[]): string[] {
 }
 
 /*
-funcion para construir un headline corto y limpio para la noticia
-prioriza titulo, luego descripcion, luego contenido
+function buildHeadline: Función para construir el titular de un artículo de noticias.
+Parámetros:
+- article: NoticiaLimpia - El artículo de noticias para el cual construir el titular.
+Returns:
+- string | null - El titular del artículo o null si no se puede construir.
+Descripción:
+Esta función toma el título del artículo y lo limpia para crear un titular adecuado.
 */
 function buildHeadline(article: NoticiaLimpia): string | null {
   const base = article.title || article.description || article.content;
@@ -423,8 +616,13 @@ function buildHeadline(article: NoticiaLimpia): string | null {
 }
 
 /*
-funcion para generar un resumen corto de la noticia
-retorna: descripcion resumida o null si no hay texto
+function buildSummary: Función para construir un resumen de un artículo de noticias.
+Parámetros:
+- article: NoticiaLimpia - El artículo de noticias para el cual construir el resumen.
+Returns:
+- string | null - El resumen del artículo o null si no se puede construir.
+Descripción:
+Esta función toma la descripción o el contenido del artículo y lo limpia para crear un resumen adecuado.
 */
 function buildSummary(article: NoticiaLimpia): string | null {
   const base = article.description || article.content || article.title;
@@ -437,9 +635,13 @@ function buildSummary(article: NoticiaLimpia): string | null {
 }
 
 /*
-funcion para generar el contenido final a mostrar
-si descripcion y contenido son muy parecidos, se queda con el mas completo
-si ambos aportan algo, los concatena
+function buildContent: Función para construir el contenido de un artículo de noticias.
+Parámetros:
+- article: NoticiaLimpia - El artículo de noticias para el cual construir el contenido.
+Returns:
+- string | null - El contenido del artículo o null si no se puede construir.
+Descripción:
+Esta función toma la descripción y el contenido del artículo y los limpia para crear un contenido adecuado.
 */
 function buildContent(article: NoticiaLimpia): string | null {
   const { description, content } = article;
@@ -462,8 +664,13 @@ function buildContent(article: NoticiaLimpia): string | null {
 }
 
 /*
-funcion para validar si una noticia ya trae suficiente cuerpo de texto
-si viene truncada o muy corta, luego intentaremos enriquecerla con scraping
+function hasEnoughBody: Función para verificar si un artículo de noticias tiene suficiente contenido.
+Parámetros:
+- article: NoticiaLimpia - El artículo de noticias para el cual verificar el contenido.
+Returns:
+- boolean - true si el artículo tiene suficiente contenido, false en caso contrario.
+Descripción:
+Esta función verifica si el artículo tiene suficiente contenido para ser considerado completo.
 */
 function hasEnoughBody(article: NoticiaLimpia): boolean {
   if (article.contentTruncated) {
@@ -478,19 +685,23 @@ function hasEnoughBody(article: NoticiaLimpia): boolean {
 }
 
 /*
-funcion para hacer scraping del contenido completo de una noticia
-usa readability para sacar titulo, extracto y texto principal
-retorna: datos scrapeados o nulls si falla
+async function scrapeArticle: Función para extraer información de un artículo de noticias.
+Parámetros:
+- url: string - La URL del artículo de noticias a extraer.
+Returns:
+- Promise<ScrapedArticle> - Una promesa que resuelve en el artículo extraído.
+Descripción:
+Esta función extrae la información de un artículo de noticias desde una URL específica.
 */
 async function scrapeArticle(url: string): Promise<ScrapedArticle> {
-  const cached = articleCache.get(url);
+  const cachedArticle = articleCache.get(url);
 
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.article;
+  if (cachedArticle && cachedArticle.expiresAt > Date.now()) {
+    return cachedArticle.article;
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), SCRAPE_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), SCRAPE_TIMEOUT_MS);
 
   try {
     const response = await fetch(url, {
@@ -511,12 +722,12 @@ async function scrapeArticle(url: string): Promise<ScrapedArticle> {
       url,
       virtualConsole: SCRAPE_VIRTUAL_CONSOLE,
     });
-    const parsed = new Readability(dom.window.document).parse();
+    const parsedArticle = new Readability(dom.window.document).parse();
 
     const scrapedArticle: ScrapedArticle = {
-      title: normalizeReadableText(parsed?.title),
-      excerpt: normalizeReadableText(parsed?.excerpt),
-      content: normalizeReadableText(parsed?.textContent),
+      title: normalizeReadableText(parsedArticle?.title),
+      excerpt: normalizeReadableText(parsedArticle?.excerpt),
+      content: normalizeReadableText(parsedArticle?.textContent),
     };
 
     articleCache.set(url, {
@@ -528,48 +739,58 @@ async function scrapeArticle(url: string): Promise<ScrapedArticle> {
   } catch {
     return { title: null, excerpt: null, content: null };
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(timeoutId);
   }
 }
 
 /*
-funcion para enriquecer una noticia con scraping si el api la trae muy corta
-retorna: noticia original o noticia enriquecida
+async function enrichArticle: Función para enriquecer un artículo de noticias con información adicional.
+Parámetros:
+- article: NoticiaLimpia - El artículo de noticias a enriquecer.
+Returns:
+- Promise<NoticiaLimpia> - Una promesa que resuelve en el artículo enriquecido.
+Descripción:
+Esta función enriquece el artículo de noticias con información adicional obtenida de fuentes externas.
 */
 async function enrichArticle(article: NoticiaLimpia): Promise<NoticiaLimpia> {
-  if (!article.url) {
+  if (!article.url || hasEnoughBody(article)) {
     return article;
   }
 
-  if (hasEnoughBody(article)) {
-    return article;
-  }
+  const scrapedArticle = await scrapeArticle(article.url);
 
-  const scraped = await scrapeArticle(article.url);
-
-  if (!scraped.content) {
+  if (!scrapedArticle.content) {
     return article;
   }
 
   const description = normalizeReadableText(
-    article.description || scraped.excerpt || shortenText(scraped.content, 220),
+    article.description ||
+      scrapedArticle.excerpt ||
+      shortenText(scrapedArticle.content, 220),
   );
 
   return {
     ...article,
-    title: article.title || scraped.title,
+    title: article.title || scrapedArticle.title,
     description,
-    content: scraped.content,
+    content: scrapedArticle.content,
     contentTruncated: false,
   };
 }
 
 /*
-funcion para enriquecer solo un subconjunto de noticias candidatas
-esto ayuda a no scrape ar todas y no hacer tan pesado el endpoint
+async function enrichCandidates: Función para enriquecer un conjunto de candidatos a artículos de noticias.
+Parámetros:
+- candidates: RankedArticle[] - El conjunto de candidatos a enriquecer.
+Returns:
+- Promise<RankedArticle[]> - Una promesa que resuelve en el conjunto de candidatos enriquecidos.
+Descripción:
+Esta función enriquece los artículos de noticias candidatos con información adicional obtenida de fuentes externas.
 */
-async function enrichCandidates(candidates: RankedArticle[]): Promise<RankedArticle[]> {
-  const subset = candidates.slice(0, SCRAPE_CANDIDATES);
+async function enrichCandidates(
+  candidates: RankedArticle[],
+): Promise<RankedArticle[]> {
+  const subset = candidates.slice(0, SCRAPE_CANDIDATES_LIMIT);
 
   const enrichedSubset = await Promise.all(
     subset.map(async (candidate) => ({
@@ -578,75 +799,72 @@ async function enrichCandidates(candidates: RankedArticle[]): Promise<RankedArti
     })),
   );
 
-  return [...enrichedSubset, ...candidates.slice(SCRAPE_CANDIDATES)];
+  return [...enrichedSubset, ...candidates.slice(SCRAPE_CANDIDATES_LIMIT)];
 }
 
 /*
-funcion para obtener la lista de equipos de la premier league desde el APIfootball
-retorna: lista de nombres de equipos
-funcionamiento:
-- usa cache simple para evitar pegarle al endpoint a cada request
-- si el cache sigue vigente, regresa eso
-- si no, consulta el endpoint local y actualiza cache
+async function getEquipos: Función para obtener la lista de equipos de fútbol.
+Returns:
+- Promise<string[]> - Una promesa que resuelve en la lista de equipos.
+Descripción:
+Esta función obtiene la lista de equipos de fútbol desde una fuente externa.
 */
 async function getEquipos(): Promise<string[]> {
   const now = Date.now();
 
-  if (equiposCache.length > 0 && now - lastFetchEquipos < CACHE_EQUIPOS_MS) {
+  if (equiposCache.length > 0 && now - lastEquiposFetchAt < TEAM_CACHE_MS) {
     return equiposCache;
   }
 
   const port = process.env.PORT || 4000;
-  const json = (await fetch(`http://localhost:${port}/api/partidos/equipos`).then((r) =>
-    r.json(),
-  )) as EquiposResponse;
+  const json = (await fetch(
+    `http://localhost:${port}/api/partidos/equipos`,
+  ).then((r) => r.json())) as EquiposResponse;
 
   equiposCache = (json.data || [])
     .map((team) => (typeof team === "string" ? team.trim() : ""))
     .filter(Boolean);
 
-  lastFetchEquipos = now;
-
+  lastEquiposFetchAt = now;
   return equiposCache;
 }
 
 /*
-funcion para limpiar noticias que vienen del News API
-parametro: noticia - objeto crudo del api
-retorna: objeto con campos limpios y banderas utiles
-funcionamiento:
-- limpia campos de texto
-- detecta si content viene truncado con "[+123 chars]"
-- deja cada valor en null si no sirve
+async function cleanNewsArticle: Función para limpiar un artículo de noticias.
+Parámetros:
+- rawArticle: NewsApiArticle - El artículo de noticias sin procesar.
+Returns:
+- NoticiaLimpia - El artículo de noticias limpio.
+Descripción:
+Esta función limpia un artículo de noticias, eliminando caracteres innecesarios y normalizando el texto.
 */
-function limpiaNoticias(noticia: NewsApiArticle): NoticiaLimpia {
-  const limpiar = (
-    valor: unknown,
+function cleanNewsArticle(rawArticle: NewsApiArticle): NoticiaLimpia {
+  const cleanText = (
+    value: unknown,
   ): { value: string | null; truncated: boolean } => {
-    if (typeof valor !== "string") {
+    if (typeof value !== "string") {
       return { value: null, truncated: false };
     }
 
-    const truncated = /\[\+\d+\s+chars\]\s*$/i.test(valor);
-
-    const limpio = valor
+    const truncated = /\[\+\d+\s+chars\]\s*$/i.test(value);
+    const cleaned = value
       .replace(/\s*\[\+\d+\s+chars\]\s*$/i, "")
       .replace(/\s+/g, " ")
       .trim();
 
     return {
-      value: limpio.length > 0 ? limpio : null,
+      value: cleaned.length > 0 ? cleaned : null,
       truncated,
     };
   };
 
-  const title = limpiar(noticia?.title);
-  const description = limpiar(noticia?.description);
-  const content = limpiar(noticia?.content);
-  const sourceName = limpiar(noticia?.source?.name);
-  const image = limpiar(noticia?.urlToImage);
-  const url = limpiar(noticia?.url);
-  const publishedAt = limpiar(noticia?.publishedAt);
+  const title = cleanText(rawArticle.title);
+  const description = cleanText(rawArticle.description);
+  const content = cleanText(rawArticle.content);
+  const sourceName = cleanText(rawArticle.source?.name);
+  const image = cleanText(rawArticle.urlToImage);
+  const url = cleanText(rawArticle.url);
+  const publishedAt = cleanText(rawArticle.publishedAt);
 
   return {
     title: title.value,
@@ -661,27 +879,25 @@ function limpiaNoticias(noticia: NewsApiArticle): NoticiaLimpia {
 }
 
 /*
-funcion para calcular la relevancia de una noticia
-parametro: article - objeto de noticia limpio, equipos - lista de equipos
-retorna: puntaje de relevancia
-funcionamiento:
-- concatena titulo, descripcion, contenido y fuente
-- suma puntos por señales directas de premier league
-- suma puntos por menciones de equipos
-- suma puntos por keywords relevantes
-- resta puntos por señales de otros deportes que no interesan
+async function getRelevancia: Función para calcular la relevancia de un artículo de noticias.
+Parámetros:
+- article: NoticiaLimpia - El artículo de noticias.
+- equipos: string[] - La lista de equipos de fútbol.
+Returns:
+- number - La puntuación de relevancia.
+Descripción:
+Esta función calcula la relevancia de un artículo de noticias en función de su contenido y la presencia de equipos de fútbol.
 */
 function getRelevancia(article: NoticiaLimpia, equipos: string[]): number {
   const title = normalizeComparable(article.title || "");
   const description = normalizeComparable(article.description || "");
   const content = normalizeComparable(article.content || "");
   const source = normalizeComparable(article.sourceName || "");
-
   const text = [title, description, content, source].join(" ");
 
   let score = 0;
 
-  if (PREMIER_LEAGUE.some((keyword) => text.includes(keyword))) {
+  if (PREMIER_LEAGUE_KEYWORDS.some((keyword) => text.includes(keyword))) {
     score += 5;
   }
 
@@ -695,7 +911,7 @@ function getRelevancia(article: NoticiaLimpia, equipos: string[]): number {
     }
   });
 
-  KEYWORDS.forEach((keyword) => {
+  RELEVANT_NEWS_KEYWORDS.forEach((keyword) => {
     if (text.includes(keyword.toLowerCase())) {
       score += 1;
     }
@@ -709,8 +925,14 @@ function getRelevancia(article: NoticiaLimpia, equipos: string[]): number {
 }
 
 /*
-funcion para comparar noticias candidatas
-prioriza las que tengan mas cuerpo de texto y, en empate, mayor score
+async function compareRankedArticles: Función para comparar dos artículos de noticias clasificados.
+Parámetros:
+- a: RankedArticle - El primer artículo de noticias.
+- b: RankedArticle - El segundo artículo de noticias.
+Returns:
+- number - El resultado de la comparación.
+Descripción:
+Esta función compara dos artículos de noticias clasificados y devuelve un valor que indica su orden relativo.
 */
 function compareRankedArticles(a: RankedArticle, b: RankedArticle): number {
   const bodyDelta =
@@ -724,8 +946,17 @@ function compareRankedArticles(a: RankedArticle, b: RankedArticle): number {
   return b.score - a.score;
 }
 
+/*
+async function dedupeRankedArticles: Función para eliminar artículos de noticias duplicados de una lista clasificada.
+Parámetros:
+- candidates: RankedArticle[] - La lista de artículos de noticias clasificados.
+Returns:
+- RankedArticle[] - La lista de artículos de noticias sin duplicados.
+Descripción:
+Esta función elimina artículos de noticias duplicados de una lista clasificada.
+*/
 function dedupeRankedArticles(candidates: RankedArticle[]): RankedArticle[] {
-  const seen = new Set<string>();
+  const seenKeys = new Set<string>();
 
   return candidates.filter((candidate) => {
     const dedupKey = getArticleDedupKey(candidate.article);
@@ -734,39 +965,63 @@ function dedupeRankedArticles(candidates: RankedArticle[]): RankedArticle[] {
       return true;
     }
 
-    if (seen.has(dedupKey)) {
+    if (seenKeys.has(dedupKey)) {
       return false;
     }
 
-    seen.add(dedupKey);
+    seenKeys.add(dedupKey);
     return true;
   });
 }
 
+/*
+async function fetchNewsApiPage: Función para obtener una página de artículos de noticias desde la API.
+Parámetros:
+- options: { team: string | null; search: string | null } - Las opciones de búsqueda.
+- page: number - El número de página.
+Returns:
+- Promise<NewsApiResponse> - La promesa que resuelve en la respuesta de la API.
+Descripción:
+Esta función obtiene una página de artículos de noticias desde la API, aplicando los filtros y ordenamiento necesarios.
+*/
 async function fetchNewsApiPage(
   options: { team: string | null; search: string | null },
   page: number,
 ): Promise<NewsApiResponse> {
   const query = encodeURIComponent(buildNewsApiQuery(options));
   const url =
-    `${NEWS_BASE}/everything?q=${query}` +
+    `${NEWS_BASE_URL}/everything?q=${query}` +
     "&language=es" +
     "&sortBy=publishedAt" +
     `&pageSize=${RAW_NEWS_PAGE_SIZE}` +
     `&page=${page}`;
 
-  return (await fetch(url, {
+  const response = await fetch(url, {
     headers: {
       "X-Api-Key": process.env.NEWS_API_KEY!,
     },
-  }).then((response) => response.json())) as NewsApiResponse;
+  });
+
+  return (await response.json()) as NewsApiResponse;
 }
 
+/*
+async function transformRankedArticles: Función para transformar una lista de artículos de noticias clasificados en una lista de noticias transformadas.
+Parámetros:
+- candidates: RankedArticle[] - La lista de artículos de noticias clasificados.
+- equipos: string[] - La lista de equipos de fútbol.
+Returns:
+- Promise<NoticiaTransformada[]> - La promesa que resuelve en la lista de noticias transformadas.
+Descripción:
+Esta función transforma una lista de artículos de noticias clasificados en una lista de noticias transformadas.
+*/
 async function transformRankedArticles(
   candidates: RankedArticle[],
   equipos: string[],
 ): Promise<NoticiaTransformada[]> {
-  const sortedCandidates = dedupeRankedArticles([...candidates]).sort(compareRankedArticles);
+  const sortedCandidates = dedupeRankedArticles([...candidates]).sort(
+    compareRankedArticles,
+  );
   const enrichedCandidates = await enrichCandidates(sortedCandidates);
 
   return dedupeRankedArticles(enrichedCandidates)
@@ -775,15 +1030,13 @@ async function transformRankedArticles(
     .map((item, index) => {
       const article = item.article;
       const teams = extractTeams(article, equipos);
-      const summary = buildSummary(article);
-      const content = buildContent(article);
 
       return {
         id: getStableArticleId(article, index),
         title: article.title,
         headline: buildHeadline(article),
-        summary,
-        content,
+        summary: buildSummary(article),
+        content: buildContent(article),
         source: article.sourceName,
         image: article.image,
         url: article.url,
@@ -802,15 +1055,37 @@ async function transformRankedArticles(
     );
 }
 
-function isMissingNewsCacheTable(error: { message?: string; code?: string } | null): boolean {
+/*
+function isMissingNewsCacheTable: Función para verificar si la tabla de cache de noticias no existe.
+Parámetros:
+- error: { message?: string; code?: string } | null - El error ocurrido.
+Returns:
+- boolean - Indica si la tabla de cache de noticias no existe.
+Descripción:
+Esta función verifica si la tabla de cache de noticias no existe en la base de datos.
+*/
+function isMissingNewsCacheTable(
+  error: { message?: string; code?: string } | null,
+): boolean {
   const message = `${error?.message || ""}`.toLowerCase();
+
   return (
     error?.code === "42P01" ||
     (message.includes("noticias_cache") &&
-      (message.includes("does not exist") || message.includes("could not find")))
+      (message.includes("does not exist") ||
+        message.includes("could not find")))
   );
 }
 
+/*
+function isCacheExpired: Función para verificar si el cache de noticias ha expirado.
+Parámetros:
+- expiresAt: string | null - La fecha de expiración del cache.
+Returns:
+- boolean - Indica si el cache ha expirado.
+Descripción:
+Esta función verifica si el cache de noticias ha expirado comparando la fecha de expiración con la fecha actual.
+*/
 function isCacheExpired(expiresAt: string | null): boolean {
   if (!expiresAt) {
     return true;
@@ -820,6 +1095,15 @@ function isCacheExpired(expiresAt: string | null): boolean {
   return Number.isNaN(expirationTime) || expirationTime <= Date.now();
 }
 
+/*
+function readNewsSnapshot: Función para leer una instantánea de noticias del cache.
+Parámetros:
+- cacheKey: string - La clave del cache.
+Returns:
+- Promise<{ payload: NewsSnapshotPayload; updatedAt: string | null; expiresAt: string | null } | null> - La promesa que resuelve en la instantánea de noticias o null si no se encuentra.
+Descripción:
+Esta función lee una instantánea de noticias del cache en Supabase.
+*/
 async function readNewsSnapshot(cacheKey: string): Promise<{
   payload: NewsSnapshotPayload;
   updatedAt: string | null;
@@ -833,9 +1117,11 @@ async function readNewsSnapshot(cacheKey: string): Promise<{
 
   if (error) {
     if (!isMissingNewsCacheTable(error)) {
-      console.error("[api/noticias] Error leyendo cache en Supabase:", error.message);
+      console.error(
+        "[api/noticias] Error leyendo cache en Supabase:",
+        error.message,
+      );
     }
-
     return null;
   }
 
@@ -850,11 +1136,22 @@ async function readNewsSnapshot(cacheKey: string): Promise<{
   };
 }
 
+/*
+function persistNewsSnapshot: Función para guardar una instantánea de noticias en el cache.
+Parámetros:
+- cacheKey: string - La clave del cache.
+- payload: NewsSnapshotPayload - El payload de la instantánea de noticias.
+Returns:
+- Promise<void> - La promesa que resuelve cuando se guarda la instantánea en el cache.
+Descripción:
+Esta función guarda una instantánea de noticias en el cache en Supabase.
+*/
 async function persistNewsSnapshot(
   cacheKey: string,
   payload: NewsSnapshotPayload,
 ): Promise<void> {
   const now = new Date();
+
   const { error } = await supabase.from("noticias_cache").upsert(
     {
       cache_key: cacheKey,
@@ -866,22 +1163,32 @@ async function persistNewsSnapshot(
   );
 
   if (error && !isMissingNewsCacheTable(error)) {
-    console.error("[api/noticias] Error guardando cache en Supabase:", error.message);
+    console.error(
+      "[api/noticias] Error guardando cache en Supabase:",
+      error.message,
+    );
   }
 }
 
-async function buildNewsSnapshot(options: {
-  offset: number;
-  limit: number;
-  team: string | null;
-  search: string | null;
-}): Promise<NewsSnapshotPayload> {
+/*
+function buildNewsSnapshot: Función para construir una instantánea de noticias.
+Parámetros:
+- options: NewsRouteOptions - Las opciones para la consulta de noticias.
+Returns:
+- Promise<NewsSnapshotPayload> - La promesa que resuelve en la instantánea de noticias.
+Descripción:
+Esta función construye una instantánea de noticias basada en las opciones proporcionadas.
+*/
+async function buildNewsSnapshot(
+  options: NewsRouteOptions,
+): Promise<NewsSnapshotPayload> {
   const equipos = await getEquipos();
   const requiredResults = options.offset + options.limit + 1;
   const rankedPool: RankedArticle[] = [];
+
   let sourcePage = 1;
   let sourceHasMore = true;
-  let transformed: NoticiaTransformada[] = [];
+  let transformedArticles: NoticiaTransformada[] = [];
 
   while (sourceHasMore && sourcePage <= MAX_SOURCE_PAGES) {
     const json = await fetchNewsApiPage(options, sourcePage);
@@ -891,24 +1198,22 @@ async function buildNewsSnapshot(options: {
     }
 
     const rankedArticles = (json.articles || [])
-      .map((raw) => {
-        const article = limpiaNoticias(raw);
+      .map((rawArticle) => {
+        const article = cleanNewsArticle(rawArticle);
         const score = getRelevancia(article, equipos);
-
-        return {
-          article,
-          score,
-        };
+        return { article, score };
       })
-      .filter((item) => item.score >= MIN_SCORE)
+      .filter((item) => item.score >= MIN_RELEVANCE_SCORE)
       .filter((item) => matchesRequestedTeam(item.article, options.team))
       .filter((item) => matchesSearchTerms(item.article, options.search));
 
     rankedPool.push(...rankedArticles);
-    transformed = await transformRankedArticles(rankedPool, equipos);
+    transformedArticles = await transformRankedArticles(rankedPool, equipos);
 
-    const reachedRequestedPage = transformed.length >= requiredResults;
-    const totalResults = typeof json.totalResults === "number" ? json.totalResults : null;
+    const reachedRequestedPage = transformedArticles.length >= requiredResults;
+    const totalResults =
+      typeof json.totalResults === "number" ? json.totalResults : null;
+
     sourceHasMore =
       (json.articles || []).length === RAW_NEWS_PAGE_SIZE &&
       (totalResults === null || sourcePage * RAW_NEWS_PAGE_SIZE < totalResults);
@@ -920,29 +1225,40 @@ async function buildNewsSnapshot(options: {
     sourcePage += 1;
   }
 
-  const pageItems = transformed.slice(options.offset, options.offset + options.limit);
-  const canFetchMoreFromSource = sourceHasMore && sourcePage <= MAX_SOURCE_PAGES;
+  const pageItems = transformedArticles.slice(
+    options.offset,
+    options.offset + options.limit,
+  );
+  const canFetchMoreFromSource =
+    sourceHasMore && sourcePage <= MAX_SOURCE_PAGES;
 
   return {
     success: true,
     count: pageItems.length,
     page: Math.floor(options.offset / Math.max(1, options.limit)) + 1,
     limit: options.limit,
-    hasMore: transformed.length > options.offset + options.limit || canFetchMoreFromSource,
+    hasMore:
+      transformedArticles.length > options.offset + options.limit ||
+      canFetchMoreFromSource,
     data: pageItems,
   };
 }
 
+/*
+function refreshNewsSnapshot: Función para refrescar la instantánea de noticias en el cache.
+Parámetros:
+- cacheKey: string - La clave del cache.
+- options: NewsRouteOptions - Las opciones para la consulta de noticias.
+Returns:
+- Promise<NewsSnapshotPayload> - La promesa que resuelve en la instantánea de noticias actualizada.
+Descripción:
+Esta función refresca la instantánea de noticias en el cache, actualizando su contenido y fecha de expiración.
+*/
 async function refreshNewsSnapshot(
   cacheKey: string,
-  options: {
-    offset: number;
-    limit: number;
-    team: string | null;
-    search: string | null;
-  },
+  options: NewsRouteOptions,
 ): Promise<NewsSnapshotPayload> {
-  const pendingRefresh = newsRefreshPromises.get(cacheKey);
+  const pendingRefresh = pendingRefreshes.get(cacheKey);
 
   if (pendingRefresh) {
     return pendingRefresh;
@@ -953,36 +1269,42 @@ async function refreshNewsSnapshot(
     await persistNewsSnapshot(cacheKey, payload);
     return payload;
   })().finally(() => {
-    newsRefreshPromises.delete(cacheKey);
+    pendingRefreshes.delete(cacheKey);
   });
 
-  newsRefreshPromises.set(cacheKey, refreshPromise);
+  pendingRefreshes.set(cacheKey, refreshPromise);
   return refreshPromise;
 }
 
-/* --------------------------------------------------------------
-   ROUTE
---------------------------------------------------------------- */
-
 /*
-endpoint principal de noticias
-flujo general:
-- obtiene equipos
-- consulta news api
-- limpia y rankea resultados
-- enriquece candidatos con scraping si hace falta
-- transforma la respuesta al formato que usa el frontend
+-------------------------------------------------------
+Rutas de noticias
+--------------------------------------------------------
+
+
+Ruta GET /api/noticias: Endpoint para obtener noticias de fútbol.
+Parámetros de consulta:
+- team: string (opcional) - El nombre del equipo para filtrar las noticias.
+- search: string (opcional) - Términos de búsqueda para filtrar las noticias.
+- page: number (opcional) - El número de página para paginación (predeterminado: 1).
+- limit: number (opcional) - El número de resultados por página (predeterminado: 10, máximo: 50).
+- offset: number (opcional) - El desplazamiento para paginación (anula el parámetro page si se proporciona).
+Descripción:
+Este endpoint devuelve una lista de noticias de fútbol filtradas por equipo y términos de búsqueda, con soporte para paginación. 
+Utiliza un sistema de caché para mejorar el rendimiento y reducir la carga en la API de noticias.
 */
-router.get("/", async (req: Request, res: Response) => {
+router.get("/", async (req: Request<{}, {}, {}, NewsQuery>, res: Response) => {
   const limit = parseLimitParam(req.query.limit);
-  const page = parsePageParam(req.query.page);
-  const explicitOffset = parseOffsetParam(req.query.offset);
-  const options = {
+  const page = parsePositiveInteger(req.query.page, 1);
+  const explicitOffset = parseNonNegativeInteger(req.query.offset);
+
+  const options: NewsRouteOptions = {
     offset: explicitOffset ?? (page - 1) * limit,
     limit,
     team: normalizeQueryText(req.query.team),
     search: normalizeQueryText(req.query.search),
   };
+
   const cacheKey = buildNewsCacheKey(options);
   let cachedSnapshot: Awaited<ReturnType<typeof readNewsSnapshot>> = null;
 
@@ -994,21 +1316,25 @@ router.get("/", async (req: Request, res: Response) => {
 
       if (stale) {
         void refreshNewsSnapshot(cacheKey, options).catch((refreshError) => {
-          console.error("[api/noticias] Error refrescando cache en segundo plano:", refreshError);
+          console.error(
+            "[api/noticias] Error refrescando cache en segundo plano:",
+            refreshError,
+          );
         });
       }
 
-      return res.json({
+      res.json({
         ...cachedSnapshot.payload,
         cached: true,
         stale,
         cachedAt: cachedSnapshot.updatedAt,
       });
+      return;
     }
 
     const freshSnapshot = await refreshNewsSnapshot(cacheKey, options);
 
-    return res.json({
+    res.json({
       ...freshSnapshot,
       cached: false,
       stale: false,
@@ -1016,23 +1342,26 @@ router.get("/", async (req: Request, res: Response) => {
     });
   } catch (error: unknown) {
     if (cachedSnapshot?.payload) {
-      return res.json({
+      res.json({
         ...cachedSnapshot.payload,
         cached: true,
         stale: true,
         fallback: true,
         cachedAt: cachedSnapshot.updatedAt,
       });
+      return;
     }
 
     const message =
-      error instanceof Error ? error.message : "Error interno al obtener noticias";
+      error instanceof Error
+        ? error.message
+        : "Error interno al obtener noticias";
 
-    return res.status(500).json({
+    res.status(500).json({
       success: false,
       error: message,
     });
   }
 });
 
-export default router;
+export { router as noticiasRouter };
