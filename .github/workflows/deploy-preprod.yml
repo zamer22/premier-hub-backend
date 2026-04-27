@@ -12,12 +12,11 @@ jobs:
 
       - name: Build image
         run: |
-          docker build -t premier-api:preprod ./api
-          docker save premier-api:preprod | sudo k3s ctr images import -
+          docker build -t premier-api:${{ github.sha }} -t premier-api:preprod ./api
+          docker save premier-api:${{ github.sha }} | sudo k3s ctr images import -
 
       - name: Deploy to K3s
         run: |
-          kubectl apply -f https://raw.githubusercontent.com/zamer22/premier-hub-infra/main/k8s/preprod/api-deployment.yaml
-          kubectl apply -f https://raw.githubusercontent.com/zamer22/premier-hub-infra/main/k8s/preprod/api-service.yaml
-          kubectl rollout restart deployment/api -n preprod
+          kubectl set image deployment/api api=premier-api:${{ github.sha }} -n preprod
           kubectl rollout status deployment/api -n preprod --timeout=120s
+
