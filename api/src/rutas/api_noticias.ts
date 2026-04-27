@@ -20,6 +20,7 @@ const MIN_RELEVANCE_SCORE = 3; // Puntuación mínima para considerar una notici
 const NEWS_CACHE_VERSION = "v2";
 const NEWS_CACHE_TTL_MS = 1000 * 60 * 20; // 20 minutos
 const SCRAPE_VIRTUAL_CONSOLE = new VirtualConsole(); // Evita que JSDOM imprima warnings o errores de scripts al hacer scraping de artículos
+const NEWS_BASE = process.env.NEWS_BASE_URL || "https://newsapi.org/v2";
 
 /*
 -----------------------------------------------------------------------------------
