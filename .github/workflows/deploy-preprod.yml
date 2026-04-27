@@ -1,0 +1,22 @@
+name: Build and Deploy Backend (preprod)
+
+on:
+  push:
+    branches: [preprod]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: |
+          docker build -t premier-api:${{ github.sha }} -t premier-api:preprod ./api
+          docker save premier-api:${{ github.sha }} | sudo k3s ctr images import -
+
+      - name: Deploy to K3s
+        run: |
+          kubectl set image deployment/api api=premier-api:${{ github.sha }} -n preprod
+          kubectl rollout status deployment/api -n preprod --timeout=120s
+
