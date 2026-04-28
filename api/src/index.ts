@@ -12,7 +12,7 @@ import partidosRouter from "./rutas/api_partidos";
 import noticiasRouter from "./rutas/api_noticias";
 import tiendaRouter from "./rutas/api_tienda_v2";
 import marketplaceRouter from "./rutas/api_marketplace";
-
+import historiaRouter from "./rutas/historia";        
 import { liveRouter, startFixtureAutoSync } from "./liveSync";
 
 const app = express();
@@ -35,6 +35,7 @@ app.use("/api", liveRouter);
 app.use("/api/noticias", noticiasRouter);
 app.use("/api/tienda", tiendaRouter);
 app.use("/api/marketplace", marketplaceRouter);
+app.use("/api/historia", historiaRouter);
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
