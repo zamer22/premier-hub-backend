@@ -14,6 +14,8 @@ import tiendaRouter from "./rutas/api_tienda_v2";
 import marketplaceRouter from "./rutas/api_marketplace";
 import historiaRouter from "./rutas/historia";        
 import { liveRouter, startFixtureAutoSync } from "./liveSync";
+import eventosRouter from "./rutas/partidosPasados";
+
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
@@ -31,6 +33,7 @@ app.use("/api/auth", authRouter);
 app.use("/api/ranking", rankingRouter);
 app.use("/api/simulador", simuladorRouter);
 app.use("/api/partidos", partidosRouter);
+app.use("/api/partidos", eventosRouter);
 app.use("/api", liveRouter);
 app.use("/api/noticias", noticiasRouter);
 app.use("/api/tienda", tiendaRouter);
