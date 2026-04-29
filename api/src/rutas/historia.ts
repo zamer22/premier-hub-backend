@@ -1,7 +1,8 @@
 import { Router, Request, Response } from "express";
 import { createClient } from "@supabase/supabase-js";
-import { footballFetch, PL_LEAGUE, PL_SEASON } from "../apifootball";
-
+import { footballFetch, PREMIER_LEAGUE_ID, CURRENT_SEASON } from "./api_partidos";
+const PL_LEAGUE = PREMIER_LEAGUE_ID;
+const PL_SEASON = CURRENT_SEASON;
 const router = Router();
 
 const supabase = createClient(
