@@ -12,20 +12,23 @@ router.get("/productos-v2", async (req, res) => {
   const ids = (productos || []).map((p: any) => p.id_producto);
   let variantesPorProducto: Record<number, any[]> = {};
   let descripcionPorProducto: Record<number, string | null> = {};
+  let categoriaPorProducto: Record<number, string | null> = {};
   if (ids.length > 0) {
     const [variantesRes, descRes] = await Promise.all([
       supabase.from("producto_variante").select("id_variante, id_producto, talla, stock").in("id_producto", ids),
-      supabase.from("producto").select("id_producto, descripcion").in("id_producto", ids),
+      supabase.from("producto").select("id_producto, descripcion, categoria").in("id_producto", ids),
     ]);
     variantesPorProducto = (variantesRes.data || []).reduce((acc: Record<number, any[]>, v: any) => {
       (acc[v.id_producto] ||= []).push({ id_variante: v.id_variante, talla: v.talla, stock: v.stock });
       return acc;
     }, {});
     descripcionPorProducto = Object.fromEntries((descRes.data || []).map((d: any) => [d.id_producto, d.descripcion ?? null]));
+    categoriaPorProducto  = Object.fromEntries((descRes.data || []).map((d: any) => [d.id_producto, d.categoria ?? null]));
   }
 
   const enriched = (productos || []).map((p: any) => ({
     ...p,
+    categoria: p.categoria ?? categoriaPorProducto[p.id_producto] ?? null,
     descripcion: descripcionPorProducto[p.id_producto] ?? null,
     variantes: variantesPorProducto[p.id_producto] || [],
   }));
