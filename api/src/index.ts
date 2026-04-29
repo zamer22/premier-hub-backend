@@ -33,7 +33,7 @@ app.use("/api/auth", authRouter);
 app.use("/api/ranking", rankingRouter);
 app.use("/api/simulador", simuladorRouter);
 app.use("/api/partidos", partidosRouter);
-app.use("/api/partidos", eventosRouter);
+app.use("/api/partidos/historial", eventosRouter);
 app.use("/api", liveRouter);
 app.use("/api/noticias", noticiasRouter);
 app.use("/api/tienda", tiendaRouter);
