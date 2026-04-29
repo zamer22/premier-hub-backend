@@ -35,7 +35,37 @@ interface GoogleRegisterRequestBody {
   correo: string;
   nombre_usuario: string;
   nickname: string;
+  foto_perfil_url?: string;
 }
+
+interface DeleteAccountRequestBody {
+  confirmacion: string;
+}
+
+interface ProfileUpdateRequestBody {
+  nombre_usuario?: string;
+  nickname?: string;
+}
+
+interface ProfileCustomizationBody {
+  marco_inventario_id?: number | null;
+  titulo_inventario_id?: number | null;
+  banner_inventario_id?: number | null;
+  trofeo_inventario_id?: number | null;
+}
+
+interface ProfilePhotoBody {
+  imageData: string;
+  fileName?: string;
+}
+
+type EquipSlotColumn =
+  | "marco_inventario_id"
+  | "titulo_inventario_id"
+  | "banner_inventario_id"
+  | "trofeo_inventario_id";
+
+const PROFILE_PICTURES_BUCKET = "profilePictures";
 
 /* 
 ----------------------------------------------------------------------------
@@ -78,6 +108,85 @@ function clearSessionCookie(response: Response): void {
   });
 }
 
+function getSessionUserId(req: Request): number | null {
+  const sessionUserId = (
+    req.signedCookies as Record<string, string | undefined>
+  )?.[SESSION_COOKIE_NAME];
+
+  if (!sessionUserId) {
+    return null;
+  }
+
+  const parsed = Number(sessionUserId);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function parseDataUrl(value: string): { buffer: Buffer; contentType: string; extension: string } {
+  const match = value.match(/^data:(image\/(?:png|jpe?g|webp));base64,(.+)$/i);
+
+  if (!match) {
+    throw new Error("Formato de imagen invalido");
+  }
+
+  const contentType = match[1].toLowerCase().replace("image/jpg", "image/jpeg");
+  const extension = contentType.split("/")[1] === "jpeg" ? "jpg" : contentType.split("/")[1];
+  const buffer = Buffer.from(match[2], "base64");
+
+  if (buffer.length > 5 * 1024 * 1024) {
+    throw new Error("La imagen debe pesar menos de 5 MB");
+  }
+
+  return { buffer, contentType, extension };
+}
+
+async function getCustomization(userId: number) {
+  const { data, error } = await supabase
+    .from("usuario_equipamiento")
+    .select("*")
+    .eq("id_usuario", userId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data || {
+    id_usuario: userId,
+    marco_inventario_id: null,
+    titulo_inventario_id: null,
+    banner_inventario_id: null,
+    trofeo_inventario_id: null,
+  };
+}
+
+async function assertOwnedEquipable(
+  userId: number,
+  inventoryId: number | null | undefined,
+  allowedTypes: string[],
+): Promise<void> {
+  if (inventoryId === null || inventoryId === undefined) {
+    return;
+  }
+
+  const { data, error } = await supabase.rpc("fn_mis_items", {
+    p_id_usuario: userId,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  const item = (data || []).find((row: any) => Number(row.id_inventario) === Number(inventoryId));
+
+  if (!item) {
+    throw new Error("Ese item no pertenece al usuario");
+  }
+
+  if (!allowedTypes.includes(item.tipo)) {
+    throw new Error(`El item no se puede equipar como ${allowedTypes.join(", ")}`);
+  }
+}
+
 /*
 function getGoogleDisplayName
 Parametros:
@@ -101,6 +210,15 @@ function getGoogleDisplayName(authUser: {
     authUser.user_metadata?.name ??
     email.split("@")[0]
   );
+}
+
+function getGoogleAvatarUrl(authUser: {
+  user_metadata?: {
+    avatar_url?: string;
+    picture?: string;
+  };
+}): string {
+  return authUser.user_metadata?.avatar_url ?? authUser.user_metadata?.picture ?? "";
 }
 
 /* 
@@ -153,6 +271,278 @@ router.post("/logout", (_req: Request, res: Response) => {
   clearSessionCookie(res);
   res.json({ success: true });
 });
+
+router.patch(
+  "/profile",
+  async (req: Request<{}, {}, ProfileUpdateRequestBody>, res: Response) => {
+    const userId = getSessionUserId(req);
+
+    if (!userId) {
+      res.status(401).json({ success: false, error: "Sesion no valida" });
+      return;
+    }
+
+    const nombreUsuario = req.body.nombre_usuario?.trim();
+    const nickname = req.body.nickname?.trim();
+
+    if (!nombreUsuario && !nickname) {
+      res.status(400).json({ success: false, error: "No hay cambios para guardar" });
+      return;
+    }
+
+    if (nickname && !/^[a-zA-Z0-9_]{3,20}$/.test(nickname)) {
+      res.status(400).json({
+        success: false,
+        error: "El nickname debe tener 3 a 20 caracteres y solo usar letras, numeros o guion bajo",
+      });
+      return;
+    }
+
+    if (nickname) {
+      const { data: existingNickname, error: nicknameError } = await supabase
+        .from("usuario")
+        .select("id_usuario")
+        .eq("nickname", nickname)
+        .neq("id_usuario", userId)
+        .maybeSingle();
+
+      if (nicknameError) {
+        res.status(500).json({ success: false, error: nicknameError.message });
+        return;
+      }
+
+      if (existingNickname) {
+        res.status(400).json({ success: false, error: "Ese nickname ya esta en uso" });
+        return;
+      }
+    }
+
+    const updates: ProfileUpdateRequestBody = {};
+    if (nombreUsuario) updates.nombre_usuario = nombreUsuario;
+    if (nickname) updates.nickname = nickname;
+
+    const { data: updatedUser, error } = await supabase
+      .from("usuario")
+      .update(updates)
+      .eq("id_usuario", userId)
+      .select("*")
+      .single();
+
+    if (error) {
+      res.status(500).json({ success: false, error: error.message });
+      return;
+    }
+
+    res.json({ success: true, user: updatedUser });
+  },
+);
+
+router.get("/profile/customization", async (req: Request, res: Response) => {
+  const userId = getSessionUserId(req);
+
+  if (!userId) {
+    res.status(401).json({ success: false, error: "Sesion no valida" });
+    return;
+  }
+
+  try {
+    const data = await getCustomization(userId);
+    res.json({ success: true, data });
+  } catch (error: unknown) {
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "No se pudo cargar la personalizacion",
+    });
+  }
+});
+
+router.patch(
+  "/profile/customization",
+  async (req: Request<{}, {}, ProfileCustomizationBody>, res: Response) => {
+    const userId = getSessionUserId(req);
+
+    if (!userId) {
+      res.status(401).json({ success: false, error: "Sesion no valida" });
+      return;
+    }
+
+    const updates: Partial<Record<EquipSlotColumn, number | null>> = {};
+
+    if ("marco_inventario_id" in req.body) {
+      updates.marco_inventario_id = req.body.marco_inventario_id ?? null;
+    }
+    if ("titulo_inventario_id" in req.body) {
+      updates.titulo_inventario_id = req.body.titulo_inventario_id ?? null;
+    }
+    if ("banner_inventario_id" in req.body) {
+      updates.banner_inventario_id = req.body.banner_inventario_id ?? null;
+    }
+    if ("trofeo_inventario_id" in req.body) {
+      updates.trofeo_inventario_id = req.body.trofeo_inventario_id ?? null;
+    }
+
+    if (Object.keys(updates).length === 0) {
+      res.status(400).json({ success: false, error: "No hay cambios para guardar" });
+      return;
+    }
+
+    try {
+      await assertOwnedEquipable(userId, updates.marco_inventario_id, ["marco"]);
+      await assertOwnedEquipable(userId, updates.titulo_inventario_id, ["titulo", "achievement"]);
+      await assertOwnedEquipable(userId, updates.banner_inventario_id, ["banner"]);
+      await assertOwnedEquipable(userId, updates.trofeo_inventario_id, ["trofeo"]);
+
+      const { data, error } = await supabase
+        .from("usuario_equipamiento")
+        .upsert(
+          {
+            id_usuario: userId,
+            ...updates,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "id_usuario" },
+        )
+        .select("*")
+        .single();
+
+      if (error) {
+        res.status(500).json({ success: false, error: error.message });
+        return;
+      }
+
+      res.json({ success: true, data });
+    } catch (error: unknown) {
+      res.status(400).json({
+        success: false,
+        error: error instanceof Error ? error.message : "No se pudo guardar la personalizacion",
+      });
+    }
+  },
+);
+
+router.post(
+  "/profile/photo",
+  async (req: Request<{}, {}, ProfilePhotoBody>, res: Response) => {
+    const userId = getSessionUserId(req);
+
+    if (!userId) {
+      res.status(401).json({ success: false, error: "Sesion no valida" });
+      return;
+    }
+
+    try {
+      const parsed = parseDataUrl(req.body.imageData || "");
+      const safeName = (req.body.fileName || "profile")
+        .replace(/\.[^.]+$/u, "")
+        .replace(/[^a-zA-Z0-9_-]/g, "")
+        .slice(0, 40) || "profile";
+      const path = `${userId}/${Date.now()}-${safeName}.${parsed.extension}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from(PROFILE_PICTURES_BUCKET)
+        .upload(path, parsed.buffer, {
+          contentType: parsed.contentType,
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      if (uploadError) {
+        res.status(500).json({ success: false, error: uploadError.message });
+        return;
+      }
+
+      const { data: publicUrlData } = supabase.storage
+        .from(PROFILE_PICTURES_BUCKET)
+        .getPublicUrl(path);
+
+      const publicUrl = publicUrlData.publicUrl;
+      const { data: updatedUser, error: updateError } = await supabase
+        .from("usuario")
+        .update({ foto_perfil: publicUrl })
+        .eq("id_usuario", userId)
+        .select("*")
+        .single();
+
+      if (updateError) {
+        res.status(500).json({ success: false, error: updateError.message });
+        return;
+      }
+
+      res.json({ success: true, url: publicUrl, user: updatedUser });
+    } catch (error: unknown) {
+      res.status(400).json({
+        success: false,
+        error: error instanceof Error ? error.message : "No se pudo subir la foto",
+      });
+    }
+  },
+);
+
+router.delete(
+  "/account",
+  async (req: Request<{}, {}, DeleteAccountRequestBody>, res: Response) => {
+    const userId = getSessionUserId(req);
+
+    if (!userId) {
+      res.status(401).json({ success: false, error: "Sesion no valida" });
+      return;
+    }
+
+    const { data: user, error: userError } = await supabase
+      .from("usuario")
+      .select("id_usuario,nickname")
+      .eq("id_usuario", userId)
+      .maybeSingle();
+
+    if (userError || !user) {
+      clearSessionCookie(res);
+      res.status(401).json({ success: false, error: "Usuario no encontrado" });
+      return;
+    }
+
+    const expectedConfirmation = `ELIMINAR ${user.nickname}`;
+    if (req.body.confirmacion !== expectedConfirmation) {
+      res.status(400).json({
+        success: false,
+        error: "La confirmacion no coincide",
+      });
+      return;
+    }
+
+    const { data: inventoryItems, error: inventoryLookupError } = await supabase
+      .from("inventario_producto")
+      .select("id")
+      .eq("id_usuario", userId);
+
+    if (inventoryLookupError) {
+      res.status(500).json({ success: false, error: inventoryLookupError.message });
+      return;
+    }
+
+    const inventoryIds = (inventoryItems || []).map((item) => item.id);
+
+    const cleanupSteps = [
+      () => supabase.from("marketplace_listado").delete().eq("id_vendedor", userId),
+      () => inventoryIds.length
+        ? supabase.from("marketplace_listado").delete().in("id_inventario", inventoryIds)
+        : Promise.resolve({ error: null }),
+      () => supabase.from("simulacion").delete().eq("id_usuario", userId),
+      () => supabase.from("inventario_producto").delete().eq("id_usuario", userId),
+      () => supabase.from("usuario").delete().eq("id_usuario", userId),
+    ];
+
+    for (const cleanup of cleanupSteps) {
+      const { error } = await cleanup();
+      if (error) {
+        res.status(500).json({ success: false, error: error.message });
+        return;
+      }
+    }
+
+    clearSessionCookie(res);
+    res.json({ success: true });
+  },
+);
 
 /*  
 Ruta POST /login
@@ -283,6 +673,7 @@ router.post(
     }
 
     const nombre = getGoogleDisplayName(authUser);
+    const avatarUrl = getGoogleAvatarUrl(authUser);
 
     const { data: existingUser } = await supabase
       .from("usuario")
@@ -295,7 +686,7 @@ router.post(
       res.json({
         success: true,
         isNew: false,
-        user: existingUser,
+        user: { ...existingUser, avatar_url: avatarUrl },
       });
       return;
     }
@@ -305,6 +696,7 @@ router.post(
       isNew: true,
       correo,
       nombre,
+      foto_perfil_url: avatarUrl,
     });
   },
 );
@@ -328,7 +720,7 @@ Después de registrar al usuario, establece una sesión y devuelve la informaci�
 router.post(
   "/google-register",
   async (req: Request<{}, {}, GoogleRegisterRequestBody>, res: Response) => {
-    const { correo, nombre_usuario: nombre, nickname } = req.body;
+    const { correo, nombre_usuario: nombre, nickname, foto_perfil_url: avatarUrl } = req.body;
 
     if (!correo || !nickname) {
       res.status(400).json({
@@ -373,7 +765,7 @@ router.post(
     }
 
     setSessionCookie(res, newUser.id_usuario);
-    res.json({ success: true, user: newUser });
+    res.json({ success: true, user: { ...newUser, avatar_url: avatarUrl || "" } });
   },
 );
 
