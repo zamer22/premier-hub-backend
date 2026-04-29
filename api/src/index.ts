@@ -12,6 +12,7 @@ import partidosRouter from "./rutas/api_partidos";
 import noticiasRouter from "./rutas/api_noticias";
 import tiendaRouter from "./rutas/api_tienda_v2";
 import marketplaceRouter from "./rutas/api_marketplace";
+import wordleRouter from "./rutas/api_wordle";
 
 import { liveRouter, startFixtureAutoSync } from "./liveSync";
 
@@ -37,6 +38,7 @@ app.use("/api", liveRouter);
 app.use("/api/noticias", noticiasRouter);
 app.use("/api/tienda", tiendaRouter);
 app.use("/api/marketplace", marketplaceRouter);
+app.use("/api/wordle", wordleRouter);
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
