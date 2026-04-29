@@ -90,6 +90,24 @@ router.put("/pedido/:id_pedido", async (req, res) => {
     tracking_numero, fecha_estimada, notas_admin,
   } = req.body;
 
+  // Leer el pedido actual: necesitamos el estado vigente para bloqueo
+  // y el costo + id_usuario por si hay que devolver puntos.
+  const { data: pedidoActual, error: fetchErr } = await supabase
+    .from("pedido")
+    .select("estado, id_usuario, costo")
+    .eq("id_pedido", id_pedido)
+    .maybeSingle();
+  if (fetchErr) return res.status(500).json({ success: false, error: fetchErr.message });
+  if (!pedidoActual) return res.status(404).json({ success: false, error: "Pedido no encontrado" });
+
+  // Pedidos entregados o cancelados son finales: no se modifican
+  if (pedidoActual.estado === "entregado" || pedidoActual.estado === "cancelado") {
+    return res.status(409).json({
+      success: false,
+      error: `El pedido está ${pedidoActual.estado} y no puede modificarse`,
+    });
+  }
+
   const updates: Record<string, any> = {};
 
   if (estado !== undefined) {
@@ -110,6 +128,8 @@ router.put("/pedido/:id_pedido", async (req, res) => {
     return res.status(400).json({ success: false, error: "Nada que actualizar" });
   }
 
+  const cancelando = estado === "cancelado" && pedidoActual.estado !== "cancelado";
+
   const { data, error } = await supabase
     .from("pedido")
     .update(updates)
@@ -117,6 +137,29 @@ router.put("/pedido/:id_pedido", async (req, res) => {
     .select(ADMIN_PEDIDO_FIELDS)
     .single();
   if (error) return res.status(500).json({ success: false, error: error.message });
+
+  // Si pasó a cancelado, devolver el costo en puntos al usuario.
+  // Si falla la devolución, devolvemos warning pero el pedido ya quedó cancelado.
+  if (cancelando) {
+    const { data: usuario, error: usrErr } = await supabase
+      .from("usuario")
+      .select("dinero")
+      .eq("id_usuario", pedidoActual.id_usuario)
+      .maybeSingle();
+    if (usrErr || !usuario) {
+      return res.json({ success: true, data, warning: "Pedido cancelado, pero no se pudo leer el saldo del usuario para devolverle los puntos" });
+    }
+    const nuevoSaldo = Number(usuario.dinero || 0) + Number(pedidoActual.costo || 0);
+    const { error: updUsrErr } = await supabase
+      .from("usuario")
+      .update({ dinero: nuevoSaldo })
+      .eq("id_usuario", pedidoActual.id_usuario);
+    if (updUsrErr) {
+      return res.json({ success: true, data, warning: "Pedido cancelado, pero la devolución de puntos falló" });
+    }
+    return res.json({ success: true, data, refunded: Number(pedidoActual.costo || 0) });
+  }
+
   res.json({ success: true, data });
 });
 
