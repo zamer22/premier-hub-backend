@@ -15,6 +15,15 @@ type ChallengePlayerRow = {
   display_order: number | null;
 };
 
+type MappedPlayer = {
+  id: string;
+  name: string;
+  initials: string;
+  image: string | null;
+  photo_url: string | null;
+  stat: number;
+};
+
 function getTodayDate() {
   const timeZone = process.env.WORDLE_TIME_ZONE || "America/Mexico_City";
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -70,6 +79,44 @@ function normalizeAttemptScore(rawScore: unknown, totalPlayers: number) {
   }
 
   return Math.min(totalPlayers, Math.max(0, Math.round(numericScore)));
+}
+
+function getSeedFromString(value: string) {
+  let seed = 2166136261;
+
+  for (let index = 0; index < value.length; index += 1) {
+    seed ^= value.charCodeAt(index);
+    seed = Math.imul(seed, 16777619);
+  }
+
+  return seed >>> 0;
+}
+
+function createSeededRandom(seedValue: string) {
+  let state = getSeedFromString(seedValue) || 1;
+
+  return () => {
+    state = Math.imul(state, 1664525) + 1013904223;
+    return ((state >>> 0) / 4294967296);
+  };
+}
+
+function shufflePlayers(players: MappedPlayer[], seedValue: string) {
+  const shuffled = [...players];
+  const random = createSeededRandom(seedValue);
+
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+
+  const keptOriginalOrder = shuffled.every((player, index) => player.id === players[index]?.id);
+  if (keptOriginalOrder && shuffled.length > 1) {
+    const firstPlayer = shuffled.shift();
+    if (firstPlayer) shuffled.push(firstPlayer);
+  }
+
+  return shuffled;
 }
 
 // ============================================================
@@ -172,12 +219,16 @@ router.get("/daily", async (req: Request, res: Response) => {
           image: player.photo_url,
           photo_url: player.photo_url,
           stat: statsMap.get(player.id) || 0,
-          correctRank: challengePlayer.correct_rank,
         };
       })
-      .filter(Boolean);
+      .filter((player): player is MappedPlayer => player !== null);
 
     const userId = getSessionUserId(req);
+    const shuffledPlayers = shufflePlayers(
+      mappedPlayers,
+      `${challenge.id}:${userId || "guest"}`
+    );
+
     const { data: rawAttempt } = userId
       ? await supabase
           .from("user_attempts")
@@ -203,7 +254,7 @@ router.get("/daily", async (req: Request, res: Response) => {
         scheduled_date: challenge.scheduled_date,
         theme: topic.title,
         metric_label: topic.metric_label,
-        players: mappedPlayers, // ya vienen ordenados por display_order desde la BD
+        players: shuffledPlayers,
         played: !!attempt,
         attempt: attempt || null,
       },
