@@ -5,24 +5,22 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-import authRouter from "./rutas/api_auth";
-import rankingRouter from "./rutas/api_ranking";
-import simuladorRouter from "./rutas/api_simulador";
+import { authRouter } from "./rutas/api_auth";
+import { rankingRouter } from "./rutas/api_ranking";
+import { simuladorRouter } from "./rutas/api_simulador";
 import partidosRouter from "./rutas/api_partidos";
-import noticiasRouter from "./rutas/api_noticias";
-import tiendaRouter from "./rutas/api_tienda_v2";
-import marketplaceRouter from "./rutas/api_marketplace";
+import { noticiasRouter } from "./rutas/api_noticias";
+import { tiendaRouter } from "./rutas/api_tienda_v2";
+import { marketplaceRouter } from "./rutas/api_marketplace";
 import wordleRouter from "./rutas/api_wordle";
 
-import { liveRouter, startFixtureAutoSync } from "./liveSync";
+import { liveRouter, startFixtureAutoSync } from "./rutas/liveSync";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
-const IS_PROD = process.env.NODE_ENV === "production";
-
 app.use(
   cors({
-    origin: IS_PROD ? process.env.CORS_ORIGIN : (process.env.DEV_CORS_ORIGIN || "http://localhost:5173"),
+    origin: process.env.CORS_ORIGIN || "http://localhost:5173",
     credentials: true,
   })
 );
@@ -33,7 +31,7 @@ app.use(express.json());
 app.use("/api/auth", authRouter);
 app.use("/api/ranking", rankingRouter);
 app.use("/api/simulador", simuladorRouter);
-app.use("/api/partidos", partidosRouter);
+app.use("/api", partidosRouter);
 app.use("/api", liveRouter);
 app.use("/api/noticias", noticiasRouter);
 app.use("/api/tienda", tiendaRouter);
