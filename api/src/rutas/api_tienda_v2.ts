@@ -220,68 +220,34 @@ router.put("/direcciones/:id_direccion/predeterminada", async (req, res) => {
 });
 
 // ============ Pedidos ============
-// Auto-progresión por tiempo (modo demo): procesando → 1min → enviado → 3min → en_camino → 6min → entregado
-const UMBRAL_ENVIADO_MIN = 1;
-const UMBRAL_EN_CAMINO_MIN = 3;
-const UMBRAL_ENTREGADO_MIN = 6;
-
-function calcularEstadoEsperado(fechaPedido: string, estadoActual: string): string {
-  if (estadoActual === "cancelado" || estadoActual === "entregado") return estadoActual;
-  const minutos = (Date.now() - new Date(fechaPedido).getTime()) / 60000;
-  if (minutos < UMBRAL_ENVIADO_MIN) return "procesando";
-  if (minutos < UMBRAL_EN_CAMINO_MIN) return "enviado";
-  if (minutos < UMBRAL_ENTREGADO_MIN) return "en_camino";
-  return "entregado";
-}
-
-async function avanzarEstadosPedidos(rows: any[]): Promise<any[]> {
-  const ahora = new Date().toISOString();
-  const updates: any[] = [];
-  const resultado = rows.map((p) => {
-    const nuevo = calcularEstadoEsperado(p.fecha_pedido, p.estado);
-    if (nuevo === p.estado) return p;
-    const upd: Record<string, any> = { estado: nuevo };
-    if (nuevo === "entregado") upd.fecha_entrega = ahora;
-    updates.push(supabase.from("pedido").update(upd).eq("id_pedido", p.id_pedido));
-    return { ...p, estado: nuevo, fecha_entrega: upd.fecha_entrega ?? p.fecha_entrega };
-  });
-  if (updates.length) Promise.all(updates).catch(() => {});
-  return resultado;
-}
+// Estados solo cambian via /api/admin (admin manual) — sin auto-progresión.
+const PEDIDO_FIELDS = `
+  id_pedido, id_usuario, id_producto, id_variante, costo,
+  direccion_snapshot, lat_destino, lng_destino, estado,
+  fecha_pedido, fecha_entrega,
+  lat_actual, lng_actual, tracking_numero, fecha_estimada, notas_admin,
+  variante:producto_variante(id_variante, talla)
+`;
 
 router.get("/pedidos/:id_usuario", async (req, res) => {
   const { data, error } = await supabase
     .from("pedido")
-    .select(`
-      id_pedido, id_usuario, id_producto, id_variante, costo,
-      direccion_snapshot, lat_destino, lng_destino, estado,
-      fecha_pedido, fecha_entrega,
-      producto:producto(id_producto, nombre, imagen, tipo),
-      variante:producto_variante(id_variante, talla)
-    `)
+    .select(`${PEDIDO_FIELDS}, producto:producto(id_producto, nombre, imagen, tipo)`)
     .eq("id_usuario", Number(req.params.id_usuario))
     .order("fecha_pedido", { ascending: false });
   if (error) return res.status(500).json({ success: false, error: error.message });
-  const actualizados = await avanzarEstadosPedidos(data || []);
-  res.json({ success: true, data: actualizados });
+  res.json({ success: true, data: data || [] });
 });
 
 router.get("/pedido/:id_pedido", async (req, res) => {
   const { data, error } = await supabase
     .from("pedido")
-    .select(`
-      id_pedido, id_usuario, id_producto, id_variante, costo,
-      direccion_snapshot, lat_destino, lng_destino, estado,
-      fecha_pedido, fecha_entrega,
-      producto:producto(id_producto, nombre, imagen, tipo, descripcion),
-      variante:producto_variante(id_variante, talla)
-    `)
+    .select(`${PEDIDO_FIELDS}, producto:producto(id_producto, nombre, imagen, tipo, descripcion)`)
     .eq("id_pedido", Number(req.params.id_pedido))
     .maybeSingle();
   if (error) return res.status(500).json({ success: false, error: error.message });
   if (!data) return res.status(404).json({ success: false, error: "Pedido no encontrado" });
-  const [actualizado] = await avanzarEstadosPedidos([data]);
-  res.json({ success: true, data: actualizado });
+  res.json({ success: true, data });
 });
 
 // Editar dirección del pedido (sólo si está en 'procesando')
@@ -331,13 +297,7 @@ router.put("/pedido/:id_pedido/direccion", async (req, res) => {
       lng_destino: nuevoSnapshot.lng,
     })
     .eq("id_pedido", id_pedido)
-    .select(`
-      id_pedido, id_usuario, id_producto, id_variante, costo,
-      direccion_snapshot, lat_destino, lng_destino, estado,
-      fecha_pedido, fecha_entrega,
-      producto:producto(id_producto, nombre, imagen, tipo, descripcion),
-      variante:producto_variante(id_variante, talla)
-    `)
+    .select(`${PEDIDO_FIELDS}, producto:producto(id_producto, nombre, imagen, tipo, descripcion)`)
     .single();
   if (updErr) return res.status(500).json({ success: false, error: updErr.message });
   res.json({ success: true, data: updated });
