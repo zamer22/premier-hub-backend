@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { footballFetch } from "../apifootball";
+import { footballFetch } from "./api_partidos";
 import supabase from "../db";
 
 const router = Router();
