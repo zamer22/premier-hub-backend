@@ -385,12 +385,13 @@ router.post("/comentarios", async (req, res) => {
     return res.status(400).json({ success: false, error: "Solo se pueden reseñar productos reales" });
   }
 
-  // Validar que el usuario haya comprado el producto
+  // Validar que el usuario haya comprado el producto (productos reales viven en `pedido`)
   const { data: compras } = await supabase
-    .from("inventario_producto")
-    .select("id_inventario")
+    .from("pedido")
+    .select("id_pedido")
     .eq("id_usuario", Number(id_usuario))
     .eq("id_producto", Number(id_producto))
+    .neq("estado", "cancelado")
     .limit(1);
   if (!compras || compras.length === 0) {
     return res.status(403).json({ success: false, error: "Solo podés reseñar productos que compraste" });
