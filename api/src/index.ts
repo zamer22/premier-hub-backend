@@ -27,7 +27,7 @@ app.use(
 );
 
 app.use(cookieParser(process.env.COOKIE_SECRET));
-app.use(express.json());
+app.use(express.json({ limit: "8mb" }));
 
 app.use("/api/auth", authRouter);
 app.use("/api/ranking", rankingRouter);
