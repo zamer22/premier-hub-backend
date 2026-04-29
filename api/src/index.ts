@@ -12,8 +12,11 @@ import partidosRouter from "./rutas/api_partidos";
 import { noticiasRouter } from "./rutas/api_noticias";
 import { tiendaRouter } from "./rutas/api_tienda_v2";
 import { marketplaceRouter } from "./rutas/api_marketplace";
-
+import wordleRouter from "./rutas/api_wordle";
 import { liveRouter, startFixtureAutoSync } from "./rutas/liveSync";
+import historiaRouter from "./rutas/historia";           
+import historialRouter from "./rutas/partidosPasados";   
+
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
@@ -35,6 +38,10 @@ app.use("/api", liveRouter);
 app.use("/api/noticias", noticiasRouter);
 app.use("/api/tienda", tiendaRouter);
 app.use("/api/marketplace", marketplaceRouter);
+app.use("/api/wordle", wordleRouter);
+app.use("/api/historia",           historiaRouter);        
+app.use("/api/partidos/historial", historialRouter);       
+
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
