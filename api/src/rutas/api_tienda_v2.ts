@@ -1,72 +1,120 @@
 import { Router } from "express";
+import type { Request, Response } from "express";
+
 import supabase from "../db";
 
 const router = Router();
 
-// Productos filtrados por categoria + temporada activa
-router.get("/productos-v2", async (req, res) => {
-  const categoria = (req.query.categoria as string) || "perfil";
-  const { data: productos, error } = await supabase.rpc("fn_productos_v2", { p_categoria: categoria });
-  if (error) return res.status(500).json({ success: false, error: error.message });
+const DEFAULT_CATEGORY = "perfil";
+const BONUS_POINTS = 500;
 
-  const ids = (productos || []).map((p: any) => p.id_producto);
-  let variantesPorProducto: Record<number, any[]> = {};
-  let descripcionPorProducto: Record<number, string | null> = {};
-  let categoriaPorProducto: Record<number, string | null> = {};
-  if (ids.length > 0) {
-    const [variantesRes, descRes] = await Promise.all([
-      supabase.from("producto_variante").select("id_variante, id_producto, talla, stock").in("id_producto", ids),
-      supabase.from("producto").select("id_producto, descripcion, categoria").in("id_producto", ids),
-    ]);
-    variantesPorProducto = (variantesRes.data || []).reduce((acc: Record<number, any[]>, v: any) => {
-      (acc[v.id_producto] ||= []).push({ id_variante: v.id_variante, talla: v.talla, stock: v.stock });
-      return acc;
-    }, {});
-    descripcionPorProducto = Object.fromEntries((descRes.data || []).map((d: any) => [d.id_producto, d.descripcion ?? null]));
-    categoriaPorProducto  = Object.fromEntries((descRes.data || []).map((d: any) => [d.id_producto, d.categoria ?? null]));
+/* ====================== TIPOS ====================== */
+type ProductosQuery = { categoria?: string };
+type UserParams = { id_usuario: string };
+type ComprarBody = {
+  id_usuario: number | string;
+  id_producto: number | string;
+};
+type BonusBody = { id_usuario: number | string };
+
+type StandardListResponse = { success: boolean; data?: unknown[]; error?: string };
+type TemporadaResponse = { success: boolean; data?: unknown | null; error?: string };
+type SaldoResponse = { success: boolean; dinero?: number; error?: string };
+type ComprarResponse = { success: boolean; saldo?: number; error?: string };
+type BonusResponse = { success: boolean; dinero?: number; bonus?: number; error?: string };
+
+/* ====================== HELPERS ====================== */
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return "Error interno del servidor";
+}
+
+function parseNumber(value: string | number): number {
+  return typeof value === "number" ? value : Number(value);
+}
+
+/* ====================== PRODUCTOS ====================== */
+// Productos filtrados por categoria + temporada activa.
+// Enriquece con variantes, descripcion y categoria leídos directamente de las tablas.
+router.get("/productos-v2", async (req: Request<{}, {}, {}, ProductosQuery>, res: Response<StandardListResponse>) => {
+  try {
+    const categoria = (req.query.categoria as string) || DEFAULT_CATEGORY;
+    const { data: productos, error } = await supabase.rpc("fn_productos_v2", { p_categoria: categoria });
+    if (error) return res.status(500).json({ success: false, error: error.message });
+
+    const ids = (productos || []).map((p: any) => p.id_producto);
+    let variantesPorProducto: Record<number, any[]> = {};
+    let descripcionPorProducto: Record<number, string | null> = {};
+    let categoriaPorProducto: Record<number, string | null> = {};
+    if (ids.length > 0) {
+      const [variantesRes, descRes] = await Promise.all([
+        supabase.from("producto_variante").select("id_variante, id_producto, talla, stock").in("id_producto", ids),
+        supabase.from("producto").select("id_producto, descripcion, categoria").in("id_producto", ids),
+      ]);
+      variantesPorProducto = (variantesRes.data || []).reduce((acc: Record<number, any[]>, v: any) => {
+        (acc[v.id_producto] ||= []).push({ id_variante: v.id_variante, talla: v.talla, stock: v.stock });
+        return acc;
+      }, {});
+      descripcionPorProducto = Object.fromEntries((descRes.data || []).map((d: any) => [d.id_producto, d.descripcion ?? null]));
+      categoriaPorProducto = Object.fromEntries((descRes.data || []).map((d: any) => [d.id_producto, d.categoria ?? null]));
+    }
+
+    const enriched = (productos || []).map((p: any) => ({
+      ...p,
+      categoria: p.categoria ?? categoriaPorProducto[p.id_producto] ?? null,
+      descripcion: descripcionPorProducto[p.id_producto] ?? null,
+      variantes: variantesPorProducto[p.id_producto] || [],
+    }));
+    res.json({ success: true, data: enriched });
+  } catch (error: unknown) {
+    res.status(500).json({ success: false, error: getErrorMessage(error) });
   }
-
-  const enriched = (productos || []).map((p: any) => ({
-    ...p,
-    categoria: p.categoria ?? categoriaPorProducto[p.id_producto] ?? null,
-    descripcion: descripcionPorProducto[p.id_producto] ?? null,
-    variantes: variantesPorProducto[p.id_producto] || [],
-  }));
-  res.json({ success: true, data: enriched });
 });
 
-// Inventario del usuario con flag en_marketplace
-router.get("/mis-items/:id_usuario", async (req, res) => {
-  const { data, error } = await supabase.rpc("fn_mis_items", {
-    p_id_usuario: Number(req.params.id_usuario),
-  });
-  if (error) return res.status(500).json({ success: false, error: error.message });
-  res.json({ success: true, data: data || [] });
+router.get("/mis-items/:id_usuario", async (req: Request<UserParams>, res: Response<StandardListResponse>) => {
+  try {
+    const userId = parseNumber(req.params.id_usuario);
+    const { data, error } = await supabase.rpc("fn_mis_items", { p_id_usuario: userId });
+    if (error) return res.status(500).json({ success: false, error: error.message });
+    res.json({ success: true, data: data || [] });
+  } catch (error: unknown) {
+    res.status(500).json({ success: false, error: getErrorMessage(error) });
+  }
 });
 
-// Temporada activa
-router.get("/temporada-activa", async (_req, res) => {
-  const { data, error } = await supabase
-    .from("temporada")
-    .select("*")
-    .eq("activa", true)
-    .maybeSingle();
-  if (error) return res.status(500).json({ success: false, error: error.message });
-  res.json({ success: true, data: data || null });
+router.get("/temporada-activa", async (_req: Request, res: Response<TemporadaResponse>) => {
+  try {
+    const { data, error } = await supabase
+      .from("temporada")
+      .select("*")
+      .eq("activa", true)
+      .maybeSingle();
+    if (error) return res.status(500).json({ success: false, error: error.message });
+    res.json({ success: true, data: data || null });
+  } catch (error: unknown) {
+    res.status(500).json({ success: false, error: getErrorMessage(error) });
+  }
 });
 
-// Saldo del usuario
-router.get("/saldo/:id_usuario", async (req, res) => {
-  const { data, error } = await supabase
-    .from("usuario")
-    .select("dinero")
-    .eq("id_usuario", Number(req.params.id_usuario))
-    .single();
-  if (error) return res.status(404).json({ success: false, error: "Usuario no encontrado" });
-  res.json({ success: true, dinero: data.dinero });
+router.get("/saldo/:id_usuario", async (req: Request<UserParams>, res: Response<SaldoResponse>) => {
+  try {
+    const userId = parseNumber(req.params.id_usuario);
+    const { data, error } = await supabase
+      .from("usuario")
+      .select("dinero")
+      .eq("id_usuario", userId)
+      .single();
+    if (error) return res.status(404).json({ success: false, error: "Usuario no encontrado" });
+    res.json({ success: true, dinero: Number(data.dinero) });
+  } catch (error: unknown) {
+    res.status(500).json({ success: false, error: getErrorMessage(error) });
+  }
 });
 
-// Comprar producto de la tienda
+/* ====================== COMPRAR ======================
+   Maneja productos de perfil (sin envío) y reales (con id_variante e id_direccion).
+   La RPC fn_comprar_producto distingue por categoria y crea pedido si aplica.
+*/
 router.post("/comprar", async (req, res) => {
   const { id_usuario, id_producto, id_variante, id_direccion } = req.body;
   if (!id_usuario || !id_producto)
@@ -82,7 +130,34 @@ router.post("/comprar", async (req, res) => {
   res.json({ success: true, saldo: data.saldo, id_pedido: data.id_pedido ?? null });
 });
 
-// ============ Direcciones de envío ============
+/* ====================== BONUS ====================== */
+router.post("/bonus", async (req: Request<{}, {}, BonusBody>, res: Response<BonusResponse>) => {
+  try {
+    const { id_usuario } = req.body;
+    if (!id_usuario) return res.status(400).json({ success: false, error: "Falta id_usuario" });
+
+    const userId = parseNumber(id_usuario);
+    const { data: usuario, error: fetchError } = await supabase
+      .from("usuario")
+      .select("dinero")
+      .eq("id_usuario", userId)
+      .single();
+    if (fetchError) return res.status(404).json({ success: false, error: "Usuario no encontrado" });
+
+    const nuevoDinero = Number(usuario.dinero) + BONUS_POINTS;
+    const { error: updateError } = await supabase
+      .from("usuario")
+      .update({ dinero: nuevoDinero })
+      .eq("id_usuario", userId);
+    if (updateError) return res.status(500).json({ success: false, error: updateError.message });
+
+    res.json({ success: true, dinero: nuevoDinero, bonus: BONUS_POINTS });
+  } catch (error: unknown) {
+    res.status(500).json({ success: false, error: getErrorMessage(error) });
+  }
+});
+
+/* ====================== DIRECCIONES DE ENVÍO ====================== */
 router.get("/direcciones/:id_usuario", async (req, res) => {
   const { data, error } = await supabase
     .from("direccion_envio")
@@ -222,8 +297,9 @@ router.put("/direcciones/:id_direccion/predeterminada", async (req, res) => {
   res.json({ success: true });
 });
 
-// ============ Pedidos ============
-// Estados solo cambian via /api/admin (admin manual) — sin auto-progresión.
+/* ====================== PEDIDOS ======================
+   Estados solo cambian via /api/admin (admin manual) — sin auto-progresión.
+*/
 const PEDIDO_FIELDS = `
   id_pedido, id_usuario, id_producto, id_variante, costo,
   direccion_snapshot, lat_destino, lng_destino, estado,
@@ -325,30 +401,7 @@ router.put("/pedido/:id_pedido/estado", async (req, res) => {
   res.json({ success: true });
 });
 
-// Agregar puntos de bonus (500 pts por reclamo)
-router.post("/bonus", async (req, res) => {
-  const { id_usuario } = req.body;
-  if (!id_usuario) return res.status(400).json({ success: false, error: "Falta id_usuario" });
-
-  const BONUS = 500;
-  const { data: usuario, error: fetchErr } = await supabase
-    .from("usuario")
-    .select("dinero")
-    .eq("id_usuario", Number(id_usuario))
-    .single();
-  if (fetchErr) return res.status(404).json({ success: false, error: "Usuario no encontrado" });
-
-  const nuevo = Number(usuario.dinero) + BONUS;
-  const { error: updateErr } = await supabase
-    .from("usuario")
-    .update({ dinero: nuevo })
-    .eq("id_usuario", Number(id_usuario));
-  if (updateErr) return res.status(500).json({ success: false, error: updateErr.message });
-
-  res.json({ success: true, dinero: nuevo, bonus: BONUS });
-});
-
-// ============ Comentarios / reseñas (solo items reales) ============
+/* ====================== COMENTARIOS / RESEÑAS (solo items reales) ====================== */
 router.get("/comentarios/:id_producto", async (req, res) => {
   const { data, error } = await supabase
     .from("comentario_producto")
@@ -433,4 +486,5 @@ router.delete("/comentarios/:id_comentario", async (req, res) => {
   res.json({ success: true });
 });
 
+export { router as tiendaRouter };
 export default router;
