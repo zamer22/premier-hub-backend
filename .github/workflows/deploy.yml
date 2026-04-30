@@ -1,4 +1,4 @@
-name: Build and Deploy Backend
+name: Build and Deploy Backend (prod)
 
 on:
   push:
@@ -12,12 +12,11 @@ jobs:
 
       - name: Build image
         run: |
-          docker build -t premier-api:latest ./api
-          docker save premier-api:latest | sudo k3s ctr images import -
+          docker build -t premier-api:${{ github.sha }} -t premier-api:latest ./api
+          docker save premier-api:${{ github.sha }} | sudo k3s ctr images import -
 
       - name: Deploy to K3s
         run: |
-          kubectl apply -f https://raw.githubusercontent.com/zamer22/premier-hub-infra/main/k8s/prod/api-deployment.yaml
-          kubectl apply -f https://raw.githubusercontent.com/zamer22/premier-hub-infra/main/k8s/prod/api-service.yaml
-          kubectl rollout restart deployment/api -n prod
+          kubectl set image deployment/api api=premier-api:${{ github.sha }} -n prod
           kubectl rollout status deployment/api -n prod --timeout=120s
+
