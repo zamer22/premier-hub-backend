@@ -15,6 +15,11 @@ type ChallengePlayerRow = {
   display_order: number | null;
 };
 
+type StatRow = {
+  player_id: string;
+  metric_value: number | string | null;
+};
+
 type MappedPlayer = {
   id: string;
   name: string;
@@ -22,6 +27,18 @@ type MappedPlayer = {
   image: string | null;
   photo_url: string | null;
   stat: number;
+  correct?: boolean;
+  is_correct?: boolean;
+  submitted_rank?: number | null;
+  correct_rank?: number | null;
+};
+
+type AttemptResult = {
+  player_id: string;
+  submitted_rank: number;
+  correct_rank: number | null;
+  correct: boolean;
+  metric_value: number | null;
 };
 
 function getTodayDate() {
@@ -119,6 +136,121 @@ function shufflePlayers(players: MappedPlayer[], seedValue: string) {
   return shuffled;
 }
 
+function buildRankMapFromStats(
+  challengePlayers: ChallengePlayerRow[],
+  stats: StatRow[] | null
+) {
+  const statsMap = new Map(
+    (stats || []).map((item) => [item.player_id, Number(item.metric_value || 0)])
+  );
+
+  const hasStatsForAllPlayers = challengePlayers.every((player) =>
+    statsMap.has(player.player_id)
+  );
+
+  const orderedPlayers = hasStatsForAllPlayers
+    ? [...challengePlayers].sort((first, second) => {
+        const statDiff =
+          (statsMap.get(second.player_id) || 0) - (statsMap.get(first.player_id) || 0);
+        if (statDiff !== 0) return statDiff;
+
+        return Number(first.correct_rank) - Number(second.correct_rank);
+      })
+    : [...challengePlayers].sort(
+        (first, second) => Number(first.correct_rank) - Number(second.correct_rank)
+      );
+
+  const rankMap = new Map<string, number>();
+  orderedPlayers.forEach((player, index) => {
+    rankMap.set(player.player_id, index + 1);
+  });
+
+  return {
+    rankMap,
+    correctOrder: orderedPlayers.map((player) => player.player_id),
+    statsMap,
+  };
+}
+
+function buildAttemptResults(
+  submittedOrder: string[],
+  rankMap: Map<string, number>,
+  statsMap: Map<string, number>
+): AttemptResult[] {
+  return submittedOrder.map((playerId, index) => {
+    const submittedRank = index + 1;
+    const correctRank = rankMap.get(playerId) || null;
+
+    return {
+      player_id: playerId,
+      submitted_rank: submittedRank,
+      correct_rank: correctRank,
+      correct: correctRank === submittedRank,
+      metric_value: statsMap.get(playerId) || null,
+    };
+  });
+}
+
+async function buildAttemptFeedback(challengeId: string, submittedOrder: string[]) {
+  const { data: challenge, error: challengeError } = await supabase
+    .from("challenges")
+    .select("topic_id")
+    .eq("id", challengeId)
+    .single();
+
+  if (challengeError) throw challengeError;
+
+  const { data: correctPlayers, error: correctPlayersError } = await supabase
+    .from("challenge_players")
+    .select("player_id, correct_rank, display_order")
+    .eq("challenge_id", challengeId);
+
+  if (correctPlayersError) throw correctPlayersError;
+  if (!correctPlayers?.length) {
+    return { score: 0, results: [], correct_order: [] };
+  }
+
+  const playerIds = (correctPlayers as ChallengePlayerRow[]).map((player) => player.player_id);
+  const { data: stats, error: statsError } = await supabase
+    .from("player_topic_stats")
+    .select("player_id, metric_value")
+    .eq("topic_id", challenge.topic_id)
+    .in("player_id", playerIds);
+
+  if (statsError) throw statsError;
+
+  const { rankMap, correctOrder, statsMap } = buildRankMapFromStats(
+    correctPlayers as ChallengePlayerRow[],
+    stats as StatRow[] | null
+  );
+
+  const results = buildAttemptResults(submittedOrder, rankMap, statsMap);
+
+  return {
+    score: results.filter((result) => result.correct).length,
+    results,
+    correct_order: correctOrder,
+  };
+}
+
+function applyAttemptResultsToPlayers(players: MappedPlayer[], results: AttemptResult[]) {
+  const resultMap = new Map(results.map((result) => [result.player_id, result]));
+
+  return players.map((player) => {
+    const result = resultMap.get(player.id);
+
+    if (!result) return player;
+
+    return {
+      ...player,
+      correct: result.correct,
+      is_correct: result.correct,
+      submitted_rank: result.submitted_rank,
+      correct_rank: result.correct_rank,
+    };
+  });
+}
+
 // ============================================================
 // GET /daily
 // ============================================================
@@ -204,7 +336,10 @@ router.get("/daily", async (req: Request, res: Response) => {
       (playerRows as PlayerRow[] | null)?.map((player) => [player.id, player]) || []
     );
     const statsMap = new Map(
-      (stats || []).map((item) => [item.player_id as string, Number(item.metric_value || 0)])
+      ((stats as StatRow[] | null) || []).map((item) => [
+        item.player_id,
+        Number(item.metric_value || 0),
+      ])
     );
 
     const mappedPlayers = orderedChallengePlayers
@@ -238,14 +373,24 @@ router.get("/daily", async (req: Request, res: Response) => {
           .maybeSingle()
       : { data: null };
 
+    const attemptFeedback = rawAttempt
+      ? await buildAttemptFeedback(challenge.id, rawAttempt.submitted_order || [])
+      : null;
+
     const attempt = rawAttempt
       ? {
           ...rawAttempt,
           raw_score: rawAttempt.score,
-          score: normalizeAttemptScore(rawAttempt.score, mappedPlayers.length),
+          score:
+            attemptFeedback?.score ??
+            normalizeAttemptScore(rawAttempt.score, mappedPlayers.length),
           dinero_ganado: rawAttempt.dinero_ganado,
+          ...(attemptFeedback || {}),
         }
       : null;
+    const players = attemptFeedback
+      ? applyAttemptResultsToPlayers(shuffledPlayers, attemptFeedback.results)
+      : shuffledPlayers;
 
     return res.json({
       success: true,
@@ -254,7 +399,8 @@ router.get("/daily", async (req: Request, res: Response) => {
         scheduled_date: challenge.scheduled_date,
         theme: topic.title,
         metric_label: topic.metric_label,
-        players: shuffledPlayers,
+        players,
+        correct_order: attemptFeedback?.correct_order,
         played: !!attempt,
         attempt: attempt || null,
       },
@@ -279,14 +425,20 @@ router.get("/played/:challengeId", async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, error: "No autenticado" });
     }
 
+    const challengeId = String(req.params.challengeId);
+
     const { data: rawAttempt, error } = await supabase
       .from("user_attempts")
       .select("score, dinero_ganado, submitted_order, created_at")
-      .eq("challenge_id", req.params.challengeId)
+      .eq("challenge_id", challengeId)
       .eq("id_usuario", userId)
       .maybeSingle();
 
     if (error) throw error;
+
+    const attemptFeedback = rawAttempt
+      ? await buildAttemptFeedback(challengeId, rawAttempt.submitted_order || [])
+      : null;
 
     return res.json({
       success: true,
@@ -295,8 +447,9 @@ router.get("/played/:challengeId", async (req: Request, res: Response) => {
         ? {
             ...rawAttempt,
             raw_score: rawAttempt.score,
-            score: normalizeAttemptScore(rawAttempt.score, 10),
+            score: attemptFeedback?.score ?? normalizeAttemptScore(rawAttempt.score, 10),
             dinero_ganado: rawAttempt.dinero_ganado,
+            ...(attemptFeedback || {}),
           }
         : null,
     });
@@ -345,10 +498,18 @@ router.post("/submit", async (req: Request, res: Response) => {
       });
     }
 
+    const { data: challenge, error: challengeError } = await supabase
+      .from("challenges")
+      .select("topic_id")
+      .eq("id", challenge_id)
+      .single();
+
+    if (challengeError) throw challengeError;
+
     // Obtener jugadores correctos del reto
     const { data: correctPlayers, error: correctPlayersError } = await supabase
       .from("challenge_players")
-      .select("player_id, correct_rank")
+      .select("player_id, correct_rank, display_order")
       .eq("challenge_id", challenge_id);
 
     if (correctPlayersError) throw correctPlayersError;
@@ -374,14 +535,24 @@ router.post("/submit", async (req: Request, res: Response) => {
       });
     }
 
-    // Calcular score: posiciones exactas (0-10)
-    const rankMap = new Map(
-      correctPlayers.map((player) => [player.player_id as string, Number(player.correct_rank)])
+    const { data: stats, error: statsError } = await supabase
+      .from("player_topic_stats")
+      .select("player_id, metric_value")
+      .eq("topic_id", challenge.topic_id)
+      .in("player_id", [...expectedIds]);
+
+    if (statsError) throw statsError;
+
+    // Calcular score: posiciones exactas (0-10), usando las metricas del tema como fuente.
+    const { rankMap, correctOrder, statsMap } = buildRankMapFromStats(
+      correctPlayers as ChallengePlayerRow[],
+      stats as StatRow[] | null
     );
 
     const correctCount = submitted_order.reduce((total, playerId, index) => {
       return total + (rankMap.get(playerId) === index + 1 ? 1 : 0);
     }, 0);
+    const results = buildAttemptResults(submitted_order, rankMap, statsMap);
 
     // Calcular dinero con la escala unificada
     const dineroGanado = calcularDinero(correctCount);
@@ -421,6 +592,8 @@ router.post("/submit", async (req: Request, res: Response) => {
         score: correctCount,
         dinero_ganado: dineroGanado,
         nuevo_saldo: nuevoSaldo,
+        results,
+        correct_order: correctOrder,
       },
     });
   } catch (error: any) {
