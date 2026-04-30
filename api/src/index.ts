@@ -23,7 +23,7 @@ const app = express();
 const PORT = Number(process.env.PORT) || 4000;
 app.use(
   cors({
-    origin: process.env.CORS_ORIGIN || "http://localhost:5173",
+    origin: process.env.CORS_ORIGIN || process.env.DEV_CORS_ORIGIN || "http://localhost:5173",
     credentials: true,
   })
 );
