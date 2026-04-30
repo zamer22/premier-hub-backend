@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { Router } from "express";
-import { footballFetch } from "./apifootball";
+import { footballFetch } from "./api_partidos";
 
 if (!process.env.SUPABASE_URL) {
   throw new Error("Falta SUPABASE_URL en el archivo .env");
@@ -291,19 +291,13 @@ liveRouter.post("/partidos/live/sync/:fixtureId", async (req, res) => {
     const fixtureId = Number(req.params.fixtureId);
 
     if (!fixtureId || Number.isNaN(fixtureId)) {
-      return res.status(400).json({
-        success: false,
-        error: "fixtureId inválido",
-      });
+      return res.status(400).json({ success: false, error: "fixtureId inválido" });
     }
 
     const result = await syncFixtureById(fixtureId);
     return res.json(result);
   } catch (e: any) {
-    return res.status(500).json({
-      success: false,
-      error: e.message,
-    });
+    return res.status(500).json({ success: false, error: e.message });
   }
 });
 
@@ -313,10 +307,7 @@ liveRouter.post("/partidos/live/start/:fixtureId", async (req, res) => {
     const fixtureId = Number(req.params.fixtureId);
 
     if (!fixtureId || Number.isNaN(fixtureId)) {
-      return res.status(400).json({
-        success: false,
-        error: "fixtureId inválido",
-      });
+      return res.status(400).json({ success: false, error: "fixtureId inválido" });
     }
 
     startFixtureAutoSync(fixtureId, 60_000);
@@ -327,10 +318,7 @@ liveRouter.post("/partidos/live/start/:fixtureId", async (req, res) => {
       message: "Auto-sync iniciado cada 60 segundos",
     });
   } catch (e: any) {
-    return res.status(500).json({
-      success: false,
-      error: e.message,
-    });
+    return res.status(500).json({ success: false, error: e.message });
   }
 });
 
@@ -338,16 +326,9 @@ liveRouter.post("/partidos/live/start/:fixtureId", async (req, res) => {
 liveRouter.post("/partidos/live/stop", async (_req, res) => {
   try {
     stopFixtureAutoSync();
-
-    return res.json({
-      success: true,
-      message: "Auto-sync detenido",
-    });
+    return res.json({ success: true, message: "Auto-sync detenido" });
   } catch (e: any) {
-    return res.status(500).json({
-      success: false,
-      error: e.message,
-    });
+    return res.status(500).json({ success: false, error: e.message });
   }
 });
 
@@ -369,7 +350,6 @@ liveRouter.get("/partidos/live", async (_req, res) => {
       .order("updated_at", { ascending: false });
 
     if (error) throw error;
-
     return res.json({ success: true, data });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: e.message });
@@ -387,7 +367,6 @@ liveRouter.get("/partidos/live/:id/lineups", async (req, res) => {
       .order("player_number", { ascending: true });
 
     if (error) throw error;
-
     return res.json({ success: true, data });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: e.message });
@@ -403,7 +382,6 @@ liveRouter.get("/partidos/live/:id/stats", async (req, res) => {
       .eq("fixture_id", req.params.id);
 
     if (error) throw error;
-
     return res.json({ success: true, data });
   } catch (e: any) {
     return res.status(500).json({ success: false, error: e.message });
