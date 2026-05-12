@@ -8,7 +8,6 @@ const router = Router();
 const DEFAULT_CATEGORY = "perfil";
 const BONUS_POINTS = 500;
 
-/* ====================== TIPOS ====================== */
 type ProductosQuery = { categoria?: string };
 type UserParams = { id_usuario: string };
 type ComprarBody = {
@@ -23,7 +22,6 @@ type SaldoResponse = { success: boolean; dinero?: number; error?: string };
 type ComprarResponse = { success: boolean; saldo?: number; error?: string };
 type BonusResponse = { success: boolean; dinero?: number; bonus?: number; error?: string };
 
-/* ====================== HELPERS ====================== */
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return "Error interno del servidor";
@@ -33,9 +31,7 @@ function parseNumber(value: string | number): number {
   return typeof value === "number" ? value : Number(value);
 }
 
-/* ====================== PRODUCTOS ====================== */
-// Productos filtrados por categoria + temporada activa.
-// Enriquece con variantes, descripcion y categoria leídos directamente de las tablas.
+// Llama fn_productos_v2 y enriquece con variantes, descripción y categoría en paralelo.
 router.get("/productos-v2", async (req: Request<{}, {}, {}, ProductosQuery>, res: Response<StandardListResponse>) => {
   try {
     const categoria = (req.query.categoria as string) || DEFAULT_CATEGORY;
@@ -111,10 +107,7 @@ router.get("/saldo/:id_usuario", async (req: Request<UserParams>, res: Response<
   }
 });
 
-/* ====================== COMPRAR ======================
-   Maneja productos de perfil (sin envío) y reales (con id_variante e id_direccion).
-   La RPC fn_comprar_producto distingue por categoria y crea pedido si aplica.
-*/
+// fn_comprar_producto: si categoria=perfil → inventario_producto; si real → pedido con dirección.
 router.post("/comprar", async (req, res) => {
   const { id_usuario, id_producto, id_variante, id_direccion } = req.body;
   if (!id_usuario || !id_producto)
@@ -130,7 +123,6 @@ router.post("/comprar", async (req, res) => {
   res.json({ success: true, saldo: data.saldo, id_pedido: data.id_pedido ?? null });
 });
 
-/* ====================== BONUS ====================== */
 router.post("/bonus", async (req: Request<{}, {}, BonusBody>, res: Response<BonusResponse>) => {
   try {
     const { id_usuario } = req.body;
@@ -157,7 +149,7 @@ router.post("/bonus", async (req: Request<{}, {}, BonusBody>, res: Response<Bonu
   }
 });
 
-/* ====================== DIRECCIONES DE ENVÍO ====================== */
+// CRUD de direcciones de envío. Tabla: direccion_envio.
 router.get("/direcciones/:id_usuario", async (req, res) => {
   const { data, error } = await supabase
     .from("direccion_envio")
@@ -297,9 +289,7 @@ router.put("/direcciones/:id_direccion/predeterminada", async (req, res) => {
   res.json({ success: true });
 });
 
-/* ====================== PEDIDOS ======================
-   Estados solo cambian via /api/admin (admin manual) — sin auto-progresión.
-*/
+// Pedidos del usuario. Estados los mueve solo /api/admin.
 const PEDIDO_FIELDS = `
   id_pedido, id_usuario, id_producto, id_variante, costo,
   direccion_snapshot, lat_destino, lng_destino, estado,
@@ -329,7 +319,7 @@ router.get("/pedido/:id_pedido", async (req, res) => {
   res.json({ success: true, data });
 });
 
-// Editar dirección del pedido (sólo si está en 'procesando')
+// Edita el direccion_snapshot y coords del pedido. Solo permitido en estado procesando.
 router.put("/pedido/:id_pedido/direccion", async (req, res) => {
   const id_pedido = Number(req.params.id_pedido);
   const {
@@ -401,7 +391,6 @@ router.put("/pedido/:id_pedido/estado", async (req, res) => {
   res.json({ success: true });
 });
 
-/* ====================== COMENTARIOS / RESEÑAS (solo items reales) ====================== */
 router.get("/comentarios/:id_producto", async (req, res) => {
   const { data, error } = await supabase
     .from("comentario_producto")
@@ -428,7 +417,7 @@ router.post("/comentarios", async (req, res) => {
     return res.status(400).json({ success: false, error: "El comentario es muy corto" });
   }
 
-  // Validar que sea un producto real
+  // Valida: producto real + usuario lo compró (existe en pedido no cancelado).
   const { data: prod } = await supabase
     .from("producto")
     .select("categoria")
@@ -438,7 +427,7 @@ router.post("/comentarios", async (req, res) => {
     return res.status(400).json({ success: false, error: "Solo se pueden reseñar productos reales" });
   }
 
-  // Validar que el usuario haya comprado el producto (productos reales viven en `pedido`)
+  // Productos reales viven en pedido, no en inventario
   const { data: compras } = await supabase
     .from("pedido")
     .select("id_pedido")
