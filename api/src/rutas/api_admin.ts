@@ -15,7 +15,8 @@ const ADMIN_PEDIDO_FIELDS = `
 
 const ESTADOS_VALIDOS = ["procesando", "enviado", "en_camino", "entregado", "cancelado"];
 
-// ---------- Middleware: verificar que sea admin ----------
+// Middleware que aplica a todas las rutas de este router.
+// Lee id_usuario del query/body/header y verifica es_admin en la DB.
 async function verificarAdmin(req: Request, res: Response, next: NextFunction) {
   const idRaw = (req.query.id_usuario ?? req.body?.id_usuario ?? req.header("x-id-usuario")) as string | number | undefined;
   const id = idRaw != null ? Number(idRaw) : NaN;
@@ -36,7 +37,7 @@ async function verificarAdmin(req: Request, res: Response, next: NextFunction) {
 
 router.use(verificarAdmin);
 
-// ---------- Lista de pedidos con filtros ----------
+// Lista todos los pedidos (máx 500). Filtros opcionales: estado, rango de fechas, búsqueda por id o tracking.
 router.get("/pedidos", async (req, res) => {
   const { estado, desde, hasta, q } = req.query;
 
@@ -55,7 +56,6 @@ router.get("/pedidos", async (req, res) => {
   if (hasta && typeof hasta === "string") {
     query = query.lte("fecha_pedido", hasta);
   }
-  // Búsqueda por id_pedido si q es numérico, o por tracking_numero si es texto
   if (q && typeof q === "string" && q.trim()) {
     const qNum = Number(q);
     if (!Number.isNaN(qNum)) {
@@ -70,7 +70,7 @@ router.get("/pedidos", async (req, res) => {
   res.json({ success: true, data: data || [] });
 });
 
-// ---------- Detalle (mismo formato) ----------
+// Detalle de un pedido específico, mismo formato que la lista.
 router.get("/pedido/:id_pedido", async (req, res) => {
   const { data, error } = await supabase
     .from("pedido")
@@ -82,7 +82,8 @@ router.get("/pedido/:id_pedido", async (req, res) => {
   res.json({ success: true, data });
 });
 
-// ---------- Update libre del admin ----------
+// Update parcial: solo actualiza los campos que vienen en el body.
+// entregado/cancelado son estados finales — no se pueden modificar después.
 router.put("/pedido/:id_pedido", async (req, res) => {
   const id_pedido = Number(req.params.id_pedido);
   const {
@@ -90,8 +91,6 @@ router.put("/pedido/:id_pedido", async (req, res) => {
     tracking_numero, fecha_estimada, notas_admin,
   } = req.body;
 
-  // Leer el pedido actual: necesitamos el estado vigente para bloqueo
-  // y el costo + id_usuario por si hay que devolver puntos.
   const { data: pedidoActual, error: fetchErr } = await supabase
     .from("pedido")
     .select("estado, id_usuario, costo")
@@ -100,7 +99,7 @@ router.put("/pedido/:id_pedido", async (req, res) => {
   if (fetchErr) return res.status(500).json({ success: false, error: fetchErr.message });
   if (!pedidoActual) return res.status(404).json({ success: false, error: "Pedido no encontrado" });
 
-  // Pedidos entregados o cancelados son finales: no se modifican
+  // Pedidos entregados o cancelados son finales
   if (pedidoActual.estado === "entregado" || pedidoActual.estado === "cancelado") {
     return res.status(409).json({
       success: false,
@@ -138,8 +137,7 @@ router.put("/pedido/:id_pedido", async (req, res) => {
     .single();
   if (error) return res.status(500).json({ success: false, error: error.message });
 
-  // Si pasó a cancelado, devolver el costo en puntos al usuario.
-  // Si falla la devolución, devolvemos warning pero el pedido ya quedó cancelado.
+  // Si pasó a cancelado, devolver puntos al usuario
   if (cancelando) {
     const { data: usuario, error: usrErr } = await supabase
       .from("usuario")
