@@ -279,6 +279,36 @@ function normalizeAnswer(value: string) {
     .toUpperCase();
 }
 
+function getSingleSurnameAnswer(value: string) {
+  const particles = new Set([
+    "AL",
+    "BIN",
+    "DA",
+    "DAS",
+    "DE",
+    "DEL",
+    "DEN",
+    "DER",
+    "DI",
+    "DOS",
+    "DU",
+    "EL",
+    "IBN",
+    "LA",
+    "LE",
+    "VAN",
+    "VON",
+  ]);
+  const tokens = value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/[^a-zA-Z]+/)
+    .map((token) => normalizeAnswer(token))
+    .filter((token) => token && !particles.has(token));
+
+  return tokens[tokens.length - 1] || normalizeAnswer(value);
+}
+
 function compactName(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -479,7 +509,7 @@ async function buildGeneratedPlayers(
 
     const profile = profiles[index];
     const names = getNameParts(profile, player);
-    const answer = normalizeAnswer(names.lastName || names.displayName);
+    const answer = getSingleSurnameAnswer(names.lastName || names.displayName);
     const coordinates =
       getGridCoordinates(player, starters) || getFallbackCoordinates(player, index, starters);
     const line =
@@ -587,7 +617,7 @@ function mapDbChallenge(challenge: DbChallengeRow, players: DbPlayerRow[]) {
       firstName: player.first_name,
       lastName: player.last_name,
       displayName: player.display_name,
-      answer: player.answer,
+      answer: getSingleSurnameAnswer(player.last_name || player.display_name || player.answer),
       number: player.number,
       position: player.position,
       line: player.line,
