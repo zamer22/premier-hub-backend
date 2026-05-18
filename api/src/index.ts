@@ -17,6 +17,7 @@ import { liveRouter, startFixtureAutoSync } from "./rutas/liveSync";
 import historiaRouter from "./rutas/historia";
 import historialRouter from "./rutas/partidosPasados";
 import adminRouter from "./rutas/api_admin";
+import missingXIRouter from "./rutas/api_missing_xi";
 
 
 const app = express();
@@ -43,6 +44,7 @@ app.use("/api/wordle", wordleRouter);
 app.use("/api/historia",           historiaRouter);
 app.use("/api/partidos/historial", historialRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/missing-xi", missingXIRouter);
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
