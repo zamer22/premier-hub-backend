@@ -184,6 +184,24 @@ type StandardApiResponse = {
 
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
+
+  if (error && typeof error === "object") {
+    const maybeError = error as {
+      message?: unknown;
+      details?: unknown;
+      hint?: unknown;
+      code?: unknown;
+    };
+    const messageParts = [
+      maybeError.message,
+      maybeError.details,
+      maybeError.hint,
+      maybeError.code ? `code: ${maybeError.code}` : null,
+    ].filter((value): value is string => typeof value === "string" && value.length > 0);
+
+    if (messageParts.length) return messageParts.join(" | ");
+  }
+
   return "Error interno del servidor";
 }
 
@@ -702,7 +720,7 @@ router.get("/daily", async (_req: Request, res: Response<StandardApiResponse>) =
     console.error("[missing-xi/daily]", error);
     return res.status(500).json({
       success: false,
-      error: "Error interno al obtener Missing XI",
+      error: "No pudimos preparar el reto diario de Missing XI. Intenta de nuevo en unos minutos.",
       detail: process.env.NODE_ENV !== "production" ? getErrorMessage(error) : undefined,
     });
   }
