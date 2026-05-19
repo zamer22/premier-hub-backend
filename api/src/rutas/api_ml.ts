@@ -37,6 +37,12 @@ type FixtureLineups = Array<{
   substitutes?: Array<{ player?: { id?: number; name?: string; pos?: string } }>;
 }>;
 
+type StandingsResponse = Array<{
+  league?: {
+    standings?: Array<Array<{ rank?: number; team?: { id?: number } }>>;
+  };
+}>;
+
 async function mlFetch(path: string, body: unknown) {
   const res = await fetch(`${ML_URL}${path}`, {
     method: "POST",
@@ -190,13 +196,17 @@ router.post("/transfer", async (req: Request, res: Response) => {
     return res.status(400).json({ success: false, message: "player_id y target_club_id requeridos" });
   }
   try {
-    const [playerData, targetSquadData] = await Promise.all([
+    const [playerData, targetSquadData, standingsData] = await Promise.all([
       footballFetch<PlayerStatResponse>("/players", {
         id: player_id,
         season: CURRENT_SEASON,
         league: PREMIER_LEAGUE_ID,
       }),
       footballFetch<TeamSquadResponse>("/players/squads", { team: target_club_id }),
+      footballFetch<StandingsResponse>("/standings", {
+        league: PREMIER_LEAGUE_ID,
+        season: CURRENT_SEASON,
+      }),
     ]);
 
     const player = playerData.response?.[0];
@@ -212,6 +222,9 @@ router.post("/transfer", async (req: Request, res: Response) => {
     const targetSquad = targetSquadData.response?.[0]?.players ?? [];
     const positionCount = targetSquad.filter((p) => p.position === position).length;
 
+    const table = standingsData.response?.[0]?.league?.standings?.[0] ?? [];
+    const leaguePosition = table.find((s) => s.team?.id === target_club_id)?.rank ?? 10;
+
     const result = await mlFetch("/ml/transfer", {
       player_id,
       target_club_id,
@@ -226,7 +239,7 @@ router.post("/transfer", async (req: Request, res: Response) => {
       },
       target_club_stats: {
         position_needed: positionCount < 3,
-        target_league_position: 10,
+        target_league_position: leaguePosition,
       },
     });
 
