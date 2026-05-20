@@ -133,6 +133,39 @@ type DbPlayerRow = {
   created_at: string;
 };
 
+type DbAttemptRow = {
+  score: number;
+  dinero_ganado: number;
+  submitted_players: SubmittedPlayer[];
+  points_awarded?: boolean;
+  awarded_at?: string | null;
+  created_at: string;
+};
+
+type SubmitAttemptResult = {
+  score: number;
+  dinero_ganado: number;
+  nuevo_saldo: number | string | null;
+  submitted_players: SubmittedPlayer[];
+  created_at: string;
+  points_awarded: boolean;
+  awarded_at: string | null;
+  already_played: boolean;
+};
+
+type SubmittedAttemptRow = {
+  letters?: unknown;
+  results?: unknown;
+};
+
+type SubmittedPlayer = {
+  id?: unknown;
+  guessed?: unknown;
+  failed?: unknown;
+  usedHint?: unknown;
+  attempts?: SubmittedAttemptRow[];
+};
+
 type GeneratedPlayer = {
   api_player_id: number;
   api_team_id: number;
@@ -223,6 +256,12 @@ function getTodayDate() {
   return `${year}-${month}-${day}`;
 }
 
+function getSessionUserId(req: Request) {
+  const rawId = (req as any).signedCookies?.ph_session;
+  const userId = Number(rawId);
+  return Number.isInteger(userId) && userId > 0 ? userId : null;
+}
+
 function getSeasonPool() {
   const rawSeasons = process.env.MISSING_XI_SEASONS;
   if (!rawSeasons) return DEFAULT_SEASONS;
@@ -277,6 +316,23 @@ function normalizeAnswer(value: string) {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-zA-Z]/g, "")
     .toUpperCase();
+}
+
+function normalizeAttemptLetters(value: unknown) {
+  if (!Array.isArray(value)) return "";
+
+  return normalizeAnswer(
+    value
+      .map((letter) => (typeof letter === "string" ? letter : ""))
+      .join("")
+  );
+}
+
+function normalizeSubmittedPlayers(value: unknown): SubmittedPlayer[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((player): player is SubmittedPlayer => {
+    return Boolean(player && typeof player === "object");
+  });
 }
 
 function getSingleSurnameAnswer(value: string) {
@@ -632,6 +688,115 @@ function mapDbChallenge(challenge: DbChallengeRow, players: DbPlayerRow[]) {
   };
 }
 
+function mapDbAttempt(attempt: DbAttemptRow | null) {
+  if (!attempt) return null;
+
+  return {
+    score: Number(attempt.score || 0),
+    dinero_ganado: Number(attempt.dinero_ganado || 0),
+    submitted_players: attempt.submitted_players || [],
+    points_awarded: attempt.points_awarded === true,
+    awarded_at: attempt.awarded_at || null,
+    created_at: attempt.created_at,
+  };
+}
+
+function applyAttemptToChallenge(challenge: ReturnType<typeof mapDbChallenge>, attempt: DbAttemptRow | null) {
+  const mappedAttempt = mapDbAttempt(attempt);
+  if (!mappedAttempt) return challenge;
+
+  const submittedMap = new Map(
+    mappedAttempt.submitted_players
+      .filter((player) => typeof player.id === "string")
+      .map((player) => [player.id as string, player])
+  );
+
+  return {
+    ...challenge,
+    played: true,
+    attempt: mappedAttempt,
+    players: challenge.players.map((player) => {
+      const submitted = submittedMap.get(player.id);
+      if (!submitted) return player;
+
+      return {
+        ...player,
+        guessed: submitted.guessed === true,
+        failed: submitted.failed === true,
+        usedHint: submitted.usedHint === true,
+        attempts: Array.isArray(submitted.attempts) ? submitted.attempts : [],
+      };
+    }),
+  };
+}
+
+async function getUserAttempt(challengeId: string, userId: number) {
+  const { data, error } = await supabase
+    .from("missing_xi_attempts")
+    .select("score, dinero_ganado, submitted_players, points_awarded, awarded_at, created_at")
+    .eq("challenge_id", challengeId)
+    .eq("id_usuario", userId)
+    .maybeSingle();
+
+  if (error) {
+    if (error.code === "42P01") {
+      console.warn("[missing-xi] Tabla missing_xi_attempts no existe todavia");
+      return null;
+    }
+
+    throw error;
+  }
+
+  return (data || null) as DbAttemptRow | null;
+}
+
+function calculateMissingXIScore(dbPlayers: DbPlayerRow[], submittedPlayers: SubmittedPlayer[]) {
+  const dbPlayerMap = new Map(dbPlayers.map((player) => [player.id, player]));
+  const submittedIds = new Set<string>();
+
+  let score = 0;
+  let dineroGanado = 0;
+
+  const normalizedSubmitted = submittedPlayers.map((submitted) => {
+    const id = typeof submitted.id === "string" ? submitted.id : "";
+    const dbPlayer = dbPlayerMap.get(id);
+    const attempts = Array.isArray(submitted.attempts) ? submitted.attempts : [];
+    const hasCorrectAttempt = dbPlayer
+      ? attempts.some((attempt) => normalizeAttemptLetters(attempt.letters) === dbPlayer.answer)
+      : false;
+    const guessed = Boolean(dbPlayer && hasCorrectAttempt);
+    const failed = !guessed;
+    const usedHint = submitted.usedHint === true;
+
+    if (id) submittedIds.add(id);
+    if (guessed) {
+      score += 1;
+      dineroGanado += usedHint ? 50 : 100;
+    }
+
+    return {
+      id,
+      guessed,
+      failed,
+      usedHint,
+      attempts,
+    };
+  });
+
+  const expectedIds = new Set(dbPlayers.map((player) => player.id));
+  const hasInvalidPlayers =
+    normalizedSubmitted.length !== expectedIds.size ||
+    submittedIds.size !== expectedIds.size ||
+    normalizedSubmitted.some((player) => !expectedIds.has(player.id));
+
+  return {
+    hasInvalidPlayers,
+    score,
+    dineroGanado,
+    submittedPlayers: normalizedSubmitted,
+  };
+}
+
 async function generateMissingXIChallenge(challengeDate: string): Promise<GeneratedChallenge> {
   const seasons = shuffleWithSeed(getSeasonPool(), `${challengeDate}:seasons`);
   const maxFixtureAttempts =
@@ -733,13 +898,15 @@ async function saveGeneratedChallenge(generatedChallenge: GeneratedChallenge) {
   return getChallengeFromDb(generatedChallenge.challenge_date);
 }
 
-router.get("/daily", async (_req: Request, res: Response<StandardApiResponse>) => {
+router.get("/daily", async (req: Request, res: Response<StandardApiResponse>) => {
   try {
     const challengeDate = getTodayDate();
     const cachedChallenge = await getChallengeFromDb(challengeDate);
 
     if (cachedChallenge) {
-      return res.json({ success: true, data: cachedChallenge });
+      const userId = getSessionUserId(req);
+      const attempt = userId ? await getUserAttempt(cachedChallenge.id, userId) : null;
+      return res.json({ success: true, data: applyAttemptToChallenge(cachedChallenge, attempt) });
     }
 
     const generatedChallenge = await generateMissingXIChallenge(challengeDate);
@@ -751,6 +918,119 @@ router.get("/daily", async (_req: Request, res: Response<StandardApiResponse>) =
     return res.status(500).json({
       success: false,
       error: "No pudimos preparar el reto diario de Missing XI. Intenta de nuevo en unos minutos.",
+      detail: process.env.NODE_ENV !== "production" ? getErrorMessage(error) : undefined,
+    });
+  }
+});
+
+router.post("/submit", async (req: Request, res: Response<StandardApiResponse>) => {
+  try {
+    const userId = getSessionUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "No autenticado" });
+    }
+
+    const { challenge_id, players } = req.body as {
+      challenge_id?: string;
+      players?: unknown;
+    };
+
+    if (!challenge_id) {
+      return res.status(400).json({ success: false, error: "Datos invalidos" });
+    }
+
+    const existingAttempt = await getUserAttempt(challenge_id, userId);
+    if (existingAttempt) {
+      return res.status(409).json({
+        success: false,
+        error: "Ya completaste este Missing XI",
+        data: mapDbAttempt(existingAttempt),
+      });
+    }
+
+    const { data: challenge, error: challengeError } = await supabase
+      .from("missing_xi_challenges")
+      .select("id")
+      .eq("id", challenge_id)
+      .single();
+
+    if (challengeError) throw challengeError;
+    if (!challenge) {
+      return res.status(404).json({ success: false, error: "Reto no encontrado" });
+    }
+
+    const { data: dbPlayers, error: playersError } = await supabase
+      .from("missing_xi_players")
+      .select("*")
+      .eq("challenge_id", challenge_id);
+
+    if (playersError) throw playersError;
+    if (!dbPlayers?.length) {
+      return res.status(404).json({ success: false, error: "El reto no tiene jugadores" });
+    }
+
+    const submittedPlayers = normalizeSubmittedPlayers(players);
+    const result = calculateMissingXIScore(dbPlayers as DbPlayerRow[], submittedPlayers);
+
+    if (result.hasInvalidPlayers) {
+      return res.status(400).json({
+        success: false,
+        error: "Los jugadores enviados no coinciden con el reto",
+      });
+    }
+
+    const { data: submitRows, error: submitError } = await supabase.rpc(
+      "submit_missing_xi_attempt",
+      {
+        p_challenge_id: challenge_id,
+        p_id_usuario: userId,
+        p_submitted_players: result.submittedPlayers,
+        p_score: result.score,
+        p_dinero_ganado: result.dineroGanado,
+      }
+    );
+
+    if (submitError) throw submitError;
+
+    const submitResult = (
+      Array.isArray(submitRows) ? submitRows[0] : submitRows
+    ) as SubmitAttemptResult | null;
+
+    if (!submitResult) {
+      throw new Error("No se pudo guardar el intento de Missing XI");
+    }
+
+    if (submitResult.already_played) {
+      return res.status(409).json({
+        success: false,
+        error: "Ya completaste este Missing XI",
+        data: {
+          score: Number(submitResult.score || 0),
+          dinero_ganado: Number(submitResult.dinero_ganado || 0),
+          submitted_players: submitResult.submitted_players || [],
+          points_awarded: submitResult.points_awarded === true,
+          awarded_at: submitResult.awarded_at || null,
+          created_at: submitResult.created_at,
+        },
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        score: Number(submitResult.score || 0),
+        dinero_ganado: Number(submitResult.dinero_ganado || 0),
+        nuevo_saldo: Number(submitResult.nuevo_saldo || 0),
+        submitted_players: submitResult.submitted_players || [],
+        points_awarded: submitResult.points_awarded === true,
+        awarded_at: submitResult.awarded_at || null,
+      },
+    });
+  } catch (error: unknown) {
+    console.error("[missing-xi/submit]", error);
+    return res.status(500).json({
+      success: false,
+      error: "Error interno al guardar el intento",
       detail: process.env.NODE_ENV !== "production" ? getErrorMessage(error) : undefined,
     });
   }
