@@ -184,6 +184,18 @@ router.get("/player-stats", async (req: Request, res: Response) => {
   }
 });
 
+// ── GET /api/ml/iconic-matches ────────────────────────────────────────────────
+router.get("/iconic-matches", async (_req: Request, res: Response) => {
+  try {
+    const r = await fetch(`${ML_URL}/ml/iconic-matches`);
+    if (!r.ok) throw new Error(`ML service error ${r.status}`);
+    const data = await r.json();
+    return res.json({ success: true, data: data.matches });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // ── POST /api/ml/transfer ─────────────────────────────────────────────────────
 router.post("/transfer", async (req: Request, res: Response) => {
   const { player_id, target_club_id, market_value_eur, years_left } = req.body as {
