@@ -54,6 +54,10 @@ interface ProfilePhotoBody {
   fileName?: string;
 }
 
+interface ProfileSavesBody {
+  saves: number;
+}
+
 type EquipSlotColumn =
   | "marco_inventario_id"
   | "titulo_inventario_id"
@@ -61,6 +65,7 @@ type EquipSlotColumn =
   | "trofeo_inventario_id";
 
 const PROFILE_PICTURES_BUCKET = "profilePictures";
+const POINTS_PER_SAVE = 10;
 
 // Crea la cookie ph_session firmada con COOKIE_SECRET. httpOnly = JS del browser no puede leerla.
 function setSessionCookie(response: Response, userId: number): void {
@@ -417,6 +422,61 @@ router.post(
         error: error instanceof Error ? error.message : "No se pudo subir la foto",
       });
     }
+  },
+);
+
+router.post(
+  "/profile/saves",
+  async (req: Request<{}, {}, ProfileSavesBody>, res: Response) => {
+    const userId = getSessionUserId(req);
+
+    if (!userId) {
+      res.status(401).json({ success: false, error: "Sesion no valida" });
+      return;
+    }
+
+    const saves = Number(req.body.saves);
+
+    if (!Number.isInteger(saves) || saves < 0) {
+      res.status(400).json({
+        success: false,
+        error: "La cantidad de atajadas debe ser un numero entero mayor o igual a 0",
+      });
+      return;
+    }
+
+    const pointsEarned = saves * POINTS_PER_SAVE;
+
+    const { data: usuario, error: fetchError } = await supabase
+      .from("usuario")
+      .select("dinero")
+      .eq("id_usuario", userId)
+      .single();
+
+    if (fetchError) {
+      res.status(404).json({ success: false, error: "Usuario no encontrado" });
+      return;
+    }
+
+    const nuevoDinero = Number(usuario.dinero || 0) + pointsEarned;
+
+    const { data: updatedUser, error: updateError } = await supabase
+      .from("usuario")
+      .update({ dinero: nuevoDinero })
+      .eq("id_usuario", userId)
+      .select("dinero")
+      .single();
+
+    if (updateError) {
+      res.status(500).json({ success: false, error: updateError.message });
+      return;
+    }
+
+    res.json({
+      success: true,
+      pointsEarned,
+      dinero: Number(updatedUser.dinero),
+    });
   },
 );
 
