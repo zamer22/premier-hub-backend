@@ -9,7 +9,13 @@ const SESSION_COOKIE_NAME = "ph_session";
 const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 días
 const SESSION_COOKIE_PATH = "/";
 const INITIAL_MONEY = 1000;
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
+/*
+----------------------------------------------------------------------------
+Interaces para los cuerpos de las solicitudes de autenticación.
+----------------------------------------------------------------------------
+*/
 interface LoginRequestBody {
   correo: string;
   contrasena: string;
@@ -54,6 +60,10 @@ interface ProfilePhotoBody {
   fileName?: string;
 }
 
+interface ProfileSavesBody {
+  saves: number;
+}
+
 type EquipSlotColumn =
   | "marco_inventario_id"
   | "titulo_inventario_id"
@@ -61,26 +71,51 @@ type EquipSlotColumn =
   | "trofeo_inventario_id";
 
 const PROFILE_PICTURES_BUCKET = "profilePictures";
+const POINTS_PER_SAVE = 10;
 
-// Crea la cookie ph_session firmada con COOKIE_SECRET. httpOnly = JS del browser no puede leerla.
+/* 
+----------------------------------------------------------------------------
+Funciones auxiliares
+----------------------------------------------------------------------------
+
+
+Function setSessionCookie
+Parametros:
+- response: Response - El objeto de respuesta de Express para configurar la cookie.
+- userId: number - El ID del usuario para almacenar en la cookie de sesión.
+Descripción:
+Esta función configura una cookie de sesión segura y con firma en la respuesta HTTP. La cookie contiene el ID del usuario y tiene una duración de 7 días. 
+Se establece como HttpOnly para mejorar la seguridad, lo que impide que el cliente JavaScript acceda a ella. 
+Además, se marca como segura (secure) solo en producción, lo que garantiza que solo se envíe a través de conexiones HTTPS. 
+La opción sameSite se establece en 'lax' para ayudar a prevenir ataques CSRF.
+*/
 function setSessionCookie(response: Response, userId: number): void {
   response.cookie(SESSION_COOKIE_NAME, String(userId), {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
+    secure: IS_PRODUCTION,
+    sameSite: IS_PRODUCTION ? "none" : "lax",
     signed: true,
     maxAge: SESSION_DURATION_MS,
     path: SESSION_COOKIE_PATH,
   });
 }
 
+/* 
+Function clearSessionCookie
+Parametros:
+- response: Response - El objeto de respuesta de Express para borrar la cookie.
+Descripción:
+Esta función borra la cookie de sesión establecida por setSessionCookie. 
+Utiliza el método clearCookie de Express, especificando el mismo nombre y ruta que se usaron para establecer la cookie. 
+*/
 function clearSessionCookie(response: Response): void {
   response.clearCookie(SESSION_COOKIE_NAME, {
+    secure: IS_PRODUCTION,
+    sameSite: IS_PRODUCTION ? "none" : "lax",
     path: SESSION_COOKIE_PATH,
   });
 }
 
-// Lee ph_session de req.signedCookies y devuelve el id_usuario (o null si no hay sesión).
 function getSessionUserId(req: Request): number | null {
   const sessionUserId = (
     req.signedCookies as Record<string, string | undefined>
@@ -160,6 +195,16 @@ async function assertOwnedEquipable(
   }
 }
 
+/*
+function getGoogleDisplayName
+Parametros:
+- authUser: object - El objeto de usuario autenticado obtenido de Google, que puede contener información como correo electrónico y metadatos del usuario.
+Descripción:
+Esta función extrae un nombre para mostrar del usuario autenticado de Google. 
+Primero, intenta obtener el nombre completo del usuario desde los metadatos (user_metadata.full_name). 
+Si no está disponible, intenta obtener un nombre alternativo (user_metadata.name). 
+Si ninguno de estos campos está presente, utiliza la parte local del correo electrónico (antes del símbolo '@') como nombre para mostrar.  
+*/
 function getGoogleDisplayName(authUser: {
   email?: string;
   user_metadata?: {
@@ -184,7 +229,20 @@ function getGoogleAvatarUrl(authUser: {
   return authUser.user_metadata?.avatar_url ?? authUser.user_metadata?.picture ?? "";
 }
 
-// Devuelve el usuario completo (incluyendo es_admin) si hay cookie de sesión válida.
+/* 
+-----------------------------------------------------------------------------
+Rutas de autenticación
+-----------------------------------------------------------------------------
+
+ 
+Ruta GET /me
+Returns:
+- 200 OK con {success: true, user} si el usuario está autenticado correctamente.
+- 401 Unauthorized con {success: false} si no hay una sesión válida o el usuario no existe.
+Descripción:
+Esta ruta verifica si el usuario tiene una cookie de sesión válida. 
+Si la cookie está presente, intenta obtener los datos del usuario correspondiente de la base de datos.
+*/
 router.get("/me", async (req: Request, res: Response) => {
   const sessionUserId = (
     req.signedCookies as Record<string, string | undefined>
@@ -195,20 +253,36 @@ router.get("/me", async (req: Request, res: Response) => {
     return;
   }
 
-  const { data: user, error } = await supabase
-    .from("usuario")
-    .select("*")
-    .eq("id_usuario", sessionUserId)
-    .maybeSingle();
+  // Si Supabase no responde en 10s devolvemos 503 en lugar de colgar al cliente
+  const timeoutGuard = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("db_timeout")), 10_000)
+  );
 
-  if (error || !user) {
-    res.status(401).json({ success: false });
-    return;
+  try {
+    const { data: user, error } = await Promise.race([
+      supabase.from("usuario").select("*").eq("id_usuario", sessionUserId).maybeSingle(),
+      timeoutGuard,
+    ]);
+
+    if (error || !user) {
+      res.status(401).json({ success: false });
+      return;
+    }
+
+    res.json({ success: true, user });
+  } catch {
+    res.status(503).json({ success: false });
   }
-
-  res.json({ success: true, user });
 });
 
+/* 
+Ruta POST /logout
+Returns:
+- 200 OK con {success: true} después de borrar la cookie de sesión.
+Descripción:
+Esta ruta cierra la sesión del usuario borrando la cookie de sesión establecida en el navegador. 
+Después de llamar a clearSessionCookie, responde con un mensaje de éxito.
+*/
 router.post("/logout", (_req: Request, res: Response) => {
   clearSessionCookie(res);
   res.json({ success: true });
@@ -420,6 +494,61 @@ router.post(
   },
 );
 
+router.post(
+  "/profile/saves",
+  async (req: Request<{}, {}, ProfileSavesBody>, res: Response) => {
+    const userId = getSessionUserId(req);
+
+    if (!userId) {
+      res.status(401).json({ success: false, error: "Sesion no valida" });
+      return;
+    }
+
+    const saves = Number(req.body.saves);
+
+    if (!Number.isInteger(saves) || saves < 0) {
+      res.status(400).json({
+        success: false,
+        error: "La cantidad de atajadas debe ser un numero entero mayor o igual a 0",
+      });
+      return;
+    }
+
+    const pointsEarned = saves * POINTS_PER_SAVE;
+
+    const { data: usuario, error: fetchError } = await supabase
+      .from("usuario")
+      .select("dinero")
+      .eq("id_usuario", userId)
+      .single();
+
+    if (fetchError) {
+      res.status(404).json({ success: false, error: "Usuario no encontrado" });
+      return;
+    }
+
+    const nuevoDinero = Number(usuario.dinero || 0) + pointsEarned;
+
+    const { data: updatedUser, error: updateError } = await supabase
+      .from("usuario")
+      .update({ dinero: nuevoDinero })
+      .eq("id_usuario", userId)
+      .select("dinero")
+      .single();
+
+    if (updateError) {
+      res.status(500).json({ success: false, error: updateError.message });
+      return;
+    }
+
+    res.json({
+      success: true,
+      pointsEarned,
+      dinero: Number(updatedUser.dinero),
+    });
+  },
+);
+
 router.delete(
   "/account",
   async (req: Request<{}, {}, DeleteAccountRequestBody>, res: Response) => {
@@ -486,6 +615,18 @@ router.delete(
   },
 );
 
+/*  
+Ruta POST /login
+Parametros:
+- correo: string - El correo electrónico del usuario que intenta iniciar sesión.
+- contrasena: string - La contraseña del usuario para autenticarse.
+Returns:
+- 200 OK con {success: true, user} si las credenciales son correctas y el inicio de sesión es exitoso.
+- 401 Unauthorized con {success: false, error} si las credenciales son incorrectas o el usuario no existe.
+- 500 Internal Server Error con {success: false, error} si ocurre un error en el servidor durante el proceso de autenticación.
+Descripción:
+Esta ruta maneja el inicio de sesión con correo electrónico y contraseña.
+*/
 router.post(
   "/login",
   async (req: Request<{}, {}, LoginRequestBody>, res: Response) => {
@@ -511,6 +652,20 @@ router.post(
   },
 );
 
+/*  
+Ruta POST /registro
+Parametros:
+- correo: string - El correo electrónico del usuario que intenta registrarse.
+- nombre_usuario: string - El nombre completo del usuario.
+- nickname: string - El nombre de usuario único.
+- contrasena: string - La contraseña del usuario para autenticarse.
+Returns:
+- 200 OK con {success: true, user} si el registro es exitoso.
+- 400 Bad Request con {success: false, error} si los datos son inválidos o el usuario ya existe.
+- 500 Internal Server Error con {success: false, error} si ocurre un error en el servidor durante el proceso de registro.
+Descripción:
+Esta ruta maneja el registro de nuevos usuarios con correo electrónico y contraseña.
+*/
 router.post(
   "/registro",
   async (req: Request<{}, {}, RegistroRequestBody>, res: Response) => {
@@ -538,7 +693,21 @@ router.post(
   },
 );
 
-// Verifica el access_token de Google. Si el correo ya existe → sesión; si no → isNew: true para que el front pida nickname.
+/*
+Ruta POST /google-sync
+Parametros:
+- access_token: string - El token de acceso de Google obtenido en el cliente después de la autenticación con Google.
+Returns:
+- 200 OK con {success: true, isNew: false, user} si el token es válido y el usuario ya existe en la base de datos.
+- 200 OK con {success: true, isNew: true, correo, nombre} si el token es válido pero el usuario no existe en la base de datos (nuevo usuario).
+- 400 Bad Request con {success: false, error} si el token no se proporciona o es inválido.
+- 401 Unauthorized con {success: false, error} si el token es inválido o no se puede autenticar con Google.
+Descripción:
+Esta ruta maneja la sincronización de usuarios autenticados con Google. 
+Recibe un token de acceso de Google, verifica su validez y extrae la información del usuario. 
+Si el usuario ya existe en la base de datos, se establece una sesión y se devuelve la información del usuario. 
+Si el usuario no existe, se devuelve un mensaje indicando que es un nuevo usuario junto con su correo y nombre
+*/
 router.post(
   "/google-sync",
   async (req: Request<{}, {}, GoogleSyncRequestBody>, res: Response) => {
@@ -603,6 +772,22 @@ router.post(
   },
 );
 
+/*
+Ruta POST /google-register
+Parametros:
+- correo: string - El correo electrónico del usuario autenticado con Google.
+- nombre: string - El nombre del usuario extraído de su perfil de Google.
+- nickname: string - El nombre de usuario único que el cliente debe proporcionar para el nuevo registro.
+Returns:
+- 200 OK con {success: true, user} si el registro es exitoso.
+- 400 Bad Request con {success: false, error} si los datos son inválidos o el nickname ya está en uso.
+- 500 Internal Server Error con {success: false, error} si ocurre un error en el servidor durante el proceso de registro.
+Descripción:
+Esta ruta maneja el registro de nuevos usuarios autenticados con Google. 
+Recibe el correo y nombre del usuario autenticado con Google, junto con un nickname proporcionado por el cliente. 
+Verifica que el nickname no esté en uso, luego crea un nuevo registro de usuario en la base de datos con la información proporcionada. 
+Después de registrar al usuario, establece una sesión y devuelve la información del nuevo usuario.
+*/
 router.post(
   "/google-register",
   async (req: Request<{}, {}, GoogleRegisterRequestBody>, res: Response) => {

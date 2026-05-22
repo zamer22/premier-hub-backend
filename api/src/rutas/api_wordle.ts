@@ -105,7 +105,7 @@ function getSeedFromString(value: string) {
     seed ^= value.charCodeAt(index);
     seed = Math.imul(seed, 16777619);
   }
-
+  
   return seed >>> 0;
 }
 
@@ -172,6 +172,39 @@ function buildRankMapFromStats(
   };
 }
 
+async function getChallengeRankingData(challengeId: string) {
+  const { data: challenge, error: challengeError } = await supabase
+    .from("challenges")
+    .select("topic_id")
+    .eq("id", challengeId)
+    .single();
+
+  if (challengeError) throw challengeError;
+
+  const { data: correctPlayers, error: correctPlayersError } = await supabase
+    .from("challenge_players")
+    .select("player_id, correct_rank, display_order")
+    .eq("challenge_id", challengeId);
+
+  if (correctPlayersError) throw correctPlayersError;
+
+  const challengePlayers = (correctPlayers || []) as ChallengePlayerRow[];
+  if (!challengePlayers.length) {
+    return null;
+  }
+
+  const playerIds = challengePlayers.map((player) => player.player_id);
+  const { data: stats, error: statsError } = await supabase
+    .from("player_topic_stats")
+    .select("player_id, metric_value")
+    .eq("topic_id", challenge.topic_id)
+    .in("player_id", playerIds);
+
+  if (statsError) throw statsError;
+
+  return buildRankMapFromStats(challengePlayers, stats as StatRow[] | null);
+}
+
 function buildAttemptResults(
   submittedOrder: string[],
   rankMap: Map<string, number>,
@@ -192,44 +225,21 @@ function buildAttemptResults(
 }
 
 async function buildAttemptFeedback(challengeId: string, submittedOrder: string[]) {
-  const { data: challenge, error: challengeError } = await supabase
-    .from("challenges")
-    .select("topic_id")
-    .eq("id", challengeId)
-    .single();
-
-  if (challengeError) throw challengeError;
-
-  const { data: correctPlayers, error: correctPlayersError } = await supabase
-    .from("challenge_players")
-    .select("player_id, correct_rank, display_order")
-    .eq("challenge_id", challengeId);
-
-  if (correctPlayersError) throw correctPlayersError;
-  if (!correctPlayers?.length) {
+  const rankingData = await getChallengeRankingData(challengeId);
+  if (!rankingData) {
     return { score: 0, results: [], correct_order: [] };
   }
 
-  const playerIds = (correctPlayers as ChallengePlayerRow[]).map((player) => player.player_id);
-  const { data: stats, error: statsError } = await supabase
-    .from("player_topic_stats")
-    .select("player_id, metric_value")
-    .eq("topic_id", challenge.topic_id)
-    .in("player_id", playerIds);
-
-  if (statsError) throw statsError;
-
-  const { rankMap, correctOrder, statsMap } = buildRankMapFromStats(
-    correctPlayers as ChallengePlayerRow[],
-    stats as StatRow[] | null
+  const results = buildAttemptResults(
+    submittedOrder,
+    rankingData.rankMap,
+    rankingData.statsMap
   );
-
-  const results = buildAttemptResults(submittedOrder, rankMap, statsMap);
 
   return {
     score: results.filter((result) => result.correct).length,
     results,
-    correct_order: correctOrder,
+    correct_order: rankingData.correctOrder,
   };
 }
 
@@ -498,22 +508,8 @@ router.post("/submit", async (req: Request, res: Response) => {
       });
     }
 
-    const { data: challenge, error: challengeError } = await supabase
-      .from("challenges")
-      .select("topic_id")
-      .eq("id", challenge_id)
-      .single();
-
-    if (challengeError) throw challengeError;
-
-    // Obtener jugadores correctos del reto
-    const { data: correctPlayers, error: correctPlayersError } = await supabase
-      .from("challenge_players")
-      .select("player_id, correct_rank, display_order")
-      .eq("challenge_id", challenge_id);
-
-    if (correctPlayersError) throw correctPlayersError;
-    if (!correctPlayers?.length) {
+    const rankingData = await getChallengeRankingData(challenge_id);
+    if (!rankingData) {
       return res.status(404).json({
         success: false,
         error: "Desafio no encontrado",
@@ -521,7 +517,7 @@ router.post("/submit", async (req: Request, res: Response) => {
     }
 
     // Validar que los jugadores enviados coincidan con los del reto
-    const expectedIds = new Set(correctPlayers.map((player) => player.player_id as string));
+    const expectedIds = new Set(rankingData.correctOrder);
     const submittedIds = new Set(submitted_order);
     const hasInvalidOrder =
       submitted_order.length !== expectedIds.size ||
@@ -535,24 +531,13 @@ router.post("/submit", async (req: Request, res: Response) => {
       });
     }
 
-    const { data: stats, error: statsError } = await supabase
-      .from("player_topic_stats")
-      .select("player_id, metric_value")
-      .eq("topic_id", challenge.topic_id)
-      .in("player_id", [...expectedIds]);
-
-    if (statsError) throw statsError;
-
     // Calcular score: posiciones exactas (0-10), usando las metricas del tema como fuente.
-    const { rankMap, correctOrder, statsMap } = buildRankMapFromStats(
-      correctPlayers as ChallengePlayerRow[],
-      stats as StatRow[] | null
+    const results = buildAttemptResults(
+      submitted_order,
+      rankingData.rankMap,
+      rankingData.statsMap
     );
-
-    const correctCount = submitted_order.reduce((total, playerId, index) => {
-      return total + (rankMap.get(playerId) === index + 1 ? 1 : 0);
-    }, 0);
-    const results = buildAttemptResults(submitted_order, rankMap, statsMap);
+    const correctCount = results.filter((result) => result.correct).length;
 
     // Calcular dinero con la escala unificada
     const dineroGanado = calcularDinero(correctCount);
@@ -593,7 +578,7 @@ router.post("/submit", async (req: Request, res: Response) => {
         dinero_ganado: dineroGanado,
         nuevo_saldo: nuevoSaldo,
         results,
-        correct_order: correctOrder,
+        correct_order: rankingData.correctOrder,
       },
     });
   } catch (error: any) {
