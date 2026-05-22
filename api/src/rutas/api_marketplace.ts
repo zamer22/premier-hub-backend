@@ -5,6 +5,11 @@ import supabase from "../db";
 
 const router = Router();
 
+/* 
+----------------------------------------------------------------------------------
+Interfaces para los parámetros de consulta y cuerpos de solicitud del marketplace.
+----------------------------------------------------------------------------------
+*/
 interface ListadosQuery {
   mios?: string;
   excluir?: string;
@@ -29,7 +34,22 @@ interface CancelarRequestBody {
   id_usuario: number;
 }
 
-// Convierte query string a número; si falla devuelve fallback.
+/*
+----------------------------------------------------------------------------------
+Función auxiliar
+----------------------------------------------------------------------------------
+
+
+function parseNumber
+Parámetros:
+- value: string | undefined - El valor a parsear, que puede ser una cadena o undefined.
+- fallback: number - El valor numérico a retornar si el parseo falla o el valor es undefined.
+Returns:
+- number - El valor numérico parseado, o el valor de fallback si el parseo no es exitoso.
+Descripción:
+Esta función intenta convertir una cadena a un número. 
+Si el valor es undefined o no se puede convertir a un número válido, retorna el valor de fallback proporcionado. 
+*/
 function parseNumber(value: string | undefined, fallback: number): number {
   if (!value) {
     return fallback;
@@ -39,7 +59,20 @@ function parseNumber(value: string | undefined, fallback: number): number {
   return Number.isNaN(parsedValue) ? fallback : parsedValue;
 }
 
-// ?mios=id → listados del usuario | sin parámetros → todos menos el usuario (?excluir=id)
+/*
+-----------------------------------------------------------------------------------
+Rutas del marketplace
+-----------------------------------------------------------------------------------
+
+
+Ruta GET /listados
+Returns:
+- 200 OK con {success: true, data: [...] } donde data es un array de listados del marketplace.
+- 500 Internal Server Error con {success: false, error: 'mensaje de error'} si ocurre un error al obtener los listados.
+- 400 Bad Request con {success: false, error: 'mensaje de error'} si los parámetros de consulta son inválidos.
+Descripción:
+Esta ruta devuelve los listados del marketplace.
+*/
 router.get(
   "/listados",
   async (req: Request<{}, {}, {}, ListadosQuery>, res: Response) => {
@@ -86,13 +119,22 @@ router.get(
   },
 );
 
-// Verifica ownership + no duplicado activo, luego crea el listado en marketplace_listado.
+/* 
+Ruta POST /publicar
+Returns:
+- 200 OK con {success: true, data: {...} } donde data es el listado recién creado.
+- 400 Bad Request con {success: false, error: 'mensaje de error'} si el item no pertenece al usuario o ya está publicado.
+- 500 Internal Server Error con {success: false, error: 'mensaje de error'} si ocurre un error al crear el listado.
+Descripción:
+Esta ruta permite a un usuario publicar un item en el marketplace. 
+Verifica que el item pertenece al usuario y que no esté ya publicado antes de crear el listado.
+*/
 router.post(
   "/publicar",
   async (req: Request<{}, {}, PublicarRequestBody>, res: Response) => {
     const { id_usuario, id_inventario, precio } = req.body;
 
-    // Verifica ownership del item
+    // Verificar que el item pertenece al usuario.
     const { data: item } = await supabase
       .from("inventario_producto")
       .select("id")
@@ -108,7 +150,7 @@ router.post(
       return;
     }
 
-    // No permitir doble publicación activa
+    // Verificar que el item no esté ya publicado.
     const { data: existingListing } = await supabase
       .from("marketplace_listado")
       .select("id_listado")
@@ -149,7 +191,16 @@ router.post(
   },
 );
 
-// RPC fn_comprar_marketplace: atómica — transfiere puntos, cambia dueño del item y cierra el listado.
+/* 
+Ruta POST /comprar
+Returns:
+- 200 OK con {success: true, data: {...} } donde data es la transacción recién realizada.
+- 400 Bad Request con {success: false, error: 'mensaje de error'} si el item no está disponible para comprar.
+- 500 Internal Server Error con {success: false, error: 'mensaje de error'} si ocurre un error al realizar la compra.
+Descripción:
+Esta ruta permite a un usuario comprar un item del marketplace. 
+Verifica que el item esté disponible para comprar antes de realizar la transacción.
+*/
 router.post(
   "/comprar",
   async (req: Request<{}, {}, ComprarRequestBody>, res: Response) => {
@@ -177,7 +228,16 @@ router.post(
   },
 );
 
-// Marca el listado como cancelado. El triple .eq() garantiza ownership sin SELECT previo.
+/* 
+Ruta DELETE /cancelar/:id_listado
+Returns:
+- 200 OK con {success: true} si la publicación se cancela exitosamente.
+- 400 Bad Request con {success: false, error: 'mensaje de error'} si no se puede cancelar la publicación.
+- 500 Internal Server Error con {success: false, error: 'mensaje de error'} si ocurre un error al cancelar la publicación.
+Descripción:
+Esta ruta permite a un usuario cancelar una publicación en el marketplace. 
+Verifica que la publicación pertenezca al usuario y que esté activa antes de cancelarla.
+*/
 router.delete(
   "/cancelar/:id_listado",
   async (
