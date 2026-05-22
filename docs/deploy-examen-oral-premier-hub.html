@@ -1,0 +1,1004 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Guia de entrevista tecnica - Deploy Premier Hub</title>
+  <style>
+    @page {
+      size: letter;
+      margin: 18mm 16mm;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: #172033;
+      background: #f5f7fb;
+      font-family: Arial, Helvetica, sans-serif;
+      font-size: 12.5px;
+      line-height: 1.48;
+    }
+
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      background: #ffffff;
+      padding: 36px 44px 48px;
+    }
+
+    h1,
+    h2,
+    h3 {
+      margin: 0;
+      line-height: 1.18;
+    }
+
+    h1 {
+      font-size: 30px;
+      color: #101827;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin-top: 30px;
+      padding-top: 16px;
+      border-top: 2px solid #d7deea;
+      font-size: 20px;
+      color: #163b68;
+      break-after: avoid;
+    }
+
+    h3 {
+      margin-top: 18px;
+      font-size: 14px;
+      color: #111827;
+      break-after: avoid;
+    }
+
+    p {
+      margin: 8px 0;
+    }
+
+    ul {
+      margin: 7px 0 10px 20px;
+      padding: 0;
+    }
+
+    li {
+      margin: 3px 0;
+    }
+
+    code {
+      padding: 1px 4px;
+      border-radius: 4px;
+      color: #0f3761;
+      background: #edf3fb;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 11.5px;
+    }
+
+    pre {
+      margin: 9px 0 12px;
+      padding: 10px 12px;
+      overflow: hidden;
+      border: 1px solid #d9e2ef;
+      border-radius: 8px;
+      background: #f8fbff;
+      color: #19324f;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 11px;
+      line-height: 1.35;
+      white-space: pre-wrap;
+    }
+
+    table {
+      width: 100%;
+      margin: 12px 0 18px;
+      border-collapse: collapse;
+      break-inside: avoid;
+    }
+
+    th,
+    td {
+      padding: 8px 9px;
+      vertical-align: top;
+      border: 1px solid #d9e2ef;
+      text-align: left;
+    }
+
+    th {
+      color: #12263f;
+      background: #eef4fb;
+      font-weight: 700;
+    }
+
+    .cover {
+      padding: 26px 0 22px;
+      border-bottom: 3px solid #163b68;
+    }
+
+    .subtitle {
+      max-width: 720px;
+      margin-top: 12px;
+      color: #4b5d73;
+      font-size: 14px;
+    }
+
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    .pill {
+      padding: 9px 11px;
+      border: 1px solid #d9e2ef;
+      border-radius: 8px;
+      background: #f8fbff;
+    }
+
+    .callout {
+      margin: 14px 0;
+      padding: 12px 14px;
+      border-left: 4px solid #1f6fb2;
+      background: #f4f9ff;
+      break-inside: avoid;
+    }
+
+    .warning {
+      border-left-color: #bb6b00;
+      background: #fff8ec;
+    }
+
+    .question {
+      margin: 14px 0 18px;
+      padding: 13px 15px;
+      border: 1px solid #dde6f1;
+      border-radius: 9px;
+      background: #ffffff;
+      break-inside: avoid;
+    }
+
+    .question h3 {
+      margin-top: 0;
+    }
+
+    .label {
+      display: inline-block;
+      margin-top: 6px;
+      margin-bottom: 2px;
+      color: #163b68;
+      font-weight: 700;
+    }
+
+    .answer {
+      color: #172033;
+    }
+
+    .evidence {
+      color: #334155;
+    }
+
+    .page-break {
+      break-before: page;
+    }
+
+    .small {
+      color: #536579;
+      font-size: 11px;
+    }
+
+    @media print {
+      body {
+        background: #ffffff;
+      }
+
+      main {
+        max-width: none;
+        padding: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <section class="cover">
+    <h1>Guia de entrevista tecnica: Deploy de Premier Hub</h1>
+    <p class="subtitle">
+      Banco de preguntas posibles con respuesta oral sugerida y evidencia esperada,
+      aterrizado al backend y frontend del proyecto Premier Hub.
+    </p>
+    <div class="meta">
+      <div class="pill"><strong>Ambientes:</strong> <code>preprod</code> y <code>prod</code></div>
+      <div class="pill"><strong>Plataforma:</strong> Docker + K3s + GitHub Actions self-hosted</div>
+      <div class="pill"><strong>Backend:</strong> Express/TypeScript en puerto <code>4000</code></div>
+      <div class="pill"><strong>Frontend:</strong> React/Vite servido con Nginx</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Resumen ejecutivo para abrir la entrevista</h2>
+    <div class="callout">
+      <strong>Respuesta de 30 segundos:</strong>
+      Nuestro despliegue es multientorno porque tenemos una rama para <code>preprod</code> y otra para
+      <code>main/prod</code>. Cada push dispara GitHub Actions en un runner self-hosted. El pipeline
+      construye una imagen Docker, la etiqueta con el SHA del commit, la importa al runtime de K3s y
+      actualiza el Deployment de Kubernetes con <code>kubectl set image</code>. Despues valida el rollout
+      con <code>kubectl rollout status</code>. El backend expone <code>/api/health</code>, usa variables
+      de entorno para secretos y configuracion, y el frontend se compila con URLs distintas por ambiente.
+    </div>
+
+    <table>
+      <thead>
+      <tr>
+        <th>Tema</th>
+        <th>Como aplica en Premier Hub</th>
+        <th>Evidencia esperada</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>Multientorno</td>
+        <td><code>preprod</code> despliega a namespace <code>preprod</code>; <code>main</code> despliega a <code>prod</code>.</td>
+        <td><code>.github/workflows/deploy-preprod.yml</code> y <code>.github/workflows/deploy.yml</code>.</td>
+      </tr>
+      <tr>
+        <td>CI/CD</td>
+        <td>Pipeline automatico en push, build de imagen, import a K3s, rollout.</td>
+        <td>GitHub Actions con <code>runs-on: self-hosted</code>.</td>
+      </tr>
+      <tr>
+        <td>Contenedores</td>
+        <td>Backend en Node 20 Alpine; frontend multi-stage con Node + Nginx.</td>
+        <td><code>api/Dockerfile</code> y <code>pagina/Dockerfile</code>.</td>
+      </tr>
+      <tr>
+        <td>Health check</td>
+        <td>Endpoint <code>GET /api/health</code> responde <code>{ status: "ok" }</code>.</td>
+        <td><code>api/src/index.ts</code>.</td>
+      </tr>
+      <tr>
+        <td>Rollback</td>
+        <td>Kubernetes puede volver al ReplicaSet anterior o redeployar un SHA previo.</td>
+        <td><code>kubectl rollout undo deployment/api -n prod</code>.</td>
+      </tr>
+      <tr>
+        <td>Secretos</td>
+        <td>Backend lee llaves con <code>process.env</code>; deben vivir en Secrets.</td>
+        <td><code>SUPABASE_SERVICE_KEY</code>, <code>COOKIE_SECRET</code>, <code>NEWS_API_KEY</code>.</td>
+      </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="page-break">
+    <h2>Mapa real del deploy</h2>
+    <pre>Backend:
+push a preprod  -> GitHub Actions -> docker build premier-api:&lt;sha&gt; -> import a K3s -> deployment/api -n preprod
+push a main     -> GitHub Actions -> docker build premier-api:&lt;sha&gt; -> import a K3s -> deployment/api -n prod
+
+Frontend:
+push a preprod  -> build con URLs preprod -> imagen premier-pagina:&lt;sha&gt; -> deployment/pagina -n preprod
+push a main     -> build con URLs prod    -> imagen premier-pagina:&lt;sha&gt; -> deployment/pagina -n prod</pre>
+
+    <h2>Preguntas y respuestas</h2>
+
+    <div class="question">
+      <h3>1. Explica el proceso completo de deploy del backend.</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        El backend se despliega automaticamente con GitHub Actions. Cuando hacemos push a
+        <code>preprod</code> o <code>main</code>, el runner self-hosted clona el repo, construye la imagen
+        Docker desde <code>./api</code>, la etiqueta con el SHA del commit, la importa a K3s y actualiza
+        el deployment <code>api</code> en el namespace correspondiente. Finalmente espera el rollout para
+        confirmar que Kubernetes pudo levantar la nueva version.
+      </p>
+      <p><span class="label">Evidencia esperada:</span></p>
+      <ul class="evidence">
+        <li><code>.github/workflows/deploy-preprod.yml</code>: rama <code>preprod</code>, namespace <code>preprod</code>.</li>
+        <li><code>.github/workflows/deploy.yml</code>: rama <code>main</code>, namespace <code>prod</code>.</li>
+        <li>Comandos <code>docker build</code>, <code>docker save | k3s ctr images import</code>, <code>kubectl set image</code>.</li>
+      </ul>
+    </div>
+
+    <div class="question">
+      <h3>2. Que significa que el deploy sea multientorno?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Significa que el mismo sistema puede ejecutarse en ambientes separados con configuracion,
+        URLs y recursos independientes. En el proyecto, <code>preprod</code> sirve para validar cambios
+        antes de produccion y <code>prod</code> es el ambiente final para usuarios. La separacion se ve
+        en ramas, namespaces de Kubernetes y dominios del frontend/API.
+      </p>
+      <p><span class="label">Evidencia esperada:</span></p>
+      <ul class="evidence">
+        <li>Backend: <code>deployment/api -n preprod</code> contra <code>deployment/api -n prod</code>.</li>
+        <li>Frontend preprod: <code>https://api-preprod.zamer-o.com</code>.</li>
+        <li>Frontend prod: <code>https://api.zamer-o.com</code>.</li>
+      </ul>
+    </div>
+
+    <div class="question">
+      <h3>3. Cual es la diferencia entre preproduccion y produccion?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Preproduccion es un ambiente casi igual a produccion, pero usado para probar integraciones,
+        configuracion y despliegues antes de afectar usuarios reales. Produccion es el ambiente estable.
+        En nuestro caso, un push a <code>preprod</code> actualiza el namespace <code>preprod</code>, y un push
+        a <code>main</code> actualiza el namespace <code>prod</code>.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> workflows separados para <code>preprod</code> y <code>main</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>4. Que rama dispara cada ambiente?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        La rama <code>preprod</code> dispara el deploy de preproduccion. La rama <code>main</code> dispara
+        el deploy de produccion.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> bloque <code>on: push: branches</code> en ambos workflows.</p>
+    </div>
+
+    <div class="question">
+      <h3>5. Que es CI/CD y donde aparece en el proyecto?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        CI/CD es automatizar la integracion y entrega/despliegue del software. En el proyecto, cada push
+        a las ramas de ambiente ejecuta un pipeline que construye la imagen y despliega a Kubernetes.
+        La parte de CI es validar que el codigo compile dentro de la imagen; la parte de CD es actualizar
+        el deployment en K3s.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> GitHub Actions en <code>.github/workflows</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>6. Por que usan un runner self-hosted?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Porque el pipeline necesita acceso directo al cluster K3s local o privado. Un runner hospedado por
+        GitHub normalmente no tendria acceso a ese entorno ni al runtime de imagenes de K3s. El runner
+        self-hosted corre dentro de la infraestructura donde puede ejecutar <code>docker</code>, <code>sudo k3s ctr</code>
+        y <code>kubectl</code>.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>runs-on: self-hosted</code> en los workflows.</p>
+    </div>
+
+    <div class="question">
+      <h3>7. Por que etiquetar la imagen con <code>github.sha</code>?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Porque el SHA identifica de forma unica el commit desplegado. Eso da trazabilidad: si algo falla,
+        podemos saber exactamente que version esta en Kubernetes. Tambien ayuda al rollback, porque podemos
+        regresar a una imagen anterior identificada por SHA.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>-t premier-api:${{ github.sha }}</code> y <code>-t premier-pagina:${{ github.sha }}</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>8. Para que sirve la etiqueta <code>latest</code> o <code>preprod</code>?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Sirve como etiqueta humana o conveniente para identificar la version mas reciente de un ambiente.
+        Sin embargo, el deployment realmente usa la etiqueta por SHA, que es mas segura porque es inmutable
+        a nivel de version.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> el build genera dos tags, pero <code>kubectl set image</code> usa <code>${{ github.sha }}</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>9. Que hace <code>docker save | sudo k3s ctr images import</code>?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Como no se esta usando un registry externo en el workflow, la imagen se guarda desde Docker y se
+        importa directamente al runtime de K3s. Asi Kubernetes puede encontrar la imagen localmente cuando
+        se actualiza el deployment.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> linea <code>docker save premier-api:${{ github.sha }} | sudo k3s ctr images import -</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>10. Que hace <code>kubectl set image</code>?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Actualiza la imagen de un contenedor dentro de un Deployment de Kubernetes. En backend cambia el
+        contenedor <code>api</code> del deployment <code>api</code>. En frontend cambia el contenedor
+        <code>pagina</code> del deployment <code>pagina</code>. Eso dispara un rolling update.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>kubectl set image deployment/api api=premier-api:&lt;sha&gt;</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>11. Que hace <code>kubectl rollout status</code>?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Espera a que Kubernetes termine el despliegue. Si los pods nuevos levantan bien, el comando termina
+        correctamente. Si hay problemas, por ejemplo la app no arranca o la imagen no existe, el rollout no
+        se completa dentro del timeout.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>kubectl rollout status deployment/api -n prod --timeout=120s</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>12. Como esta construido el contenedor del backend?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Usa <code>node:20-alpine</code>, copia <code>package.json</code> y <code>package-lock.json</code>,
+        instala dependencias, copia <code>tsconfig.json</code> y <code>src</code>, compila TypeScript con
+        <code>npm run build</code>, expone el puerto <code>4000</code> y arranca con <code>node dist/index.js</code>.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>api/Dockerfile</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>13. Por que el backend escucha en <code>0.0.0.0</code>?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Porque dentro de un contenedor no basta con escuchar solo en <code>localhost</code>. Al usar
+        <code>0.0.0.0</code>, Express acepta conexiones desde la red del contenedor, lo que permite que
+        Kubernetes o el Service enruten trafico hacia la API.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>app.listen(PORT, "0.0.0.0", ...)</code> en <code>api/src/index.ts</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>14. Como se configura el puerto del backend?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        El backend lee <code>process.env.PORT</code>. Si no existe, usa <code>4000</code>. Esto permite que
+        el mismo codigo corra localmente y en Kubernetes con configuracion distinta.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>const PORT = Number(process.env.PORT) || 4000</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>15. Como esta construido el contenedor del frontend?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Es un build multi-stage. Primero usa Node para instalar dependencias y compilar React/Vite. Luego
+        copia el resultado <code>dist</code> a una imagen <code>nginx:alpine</code>, que sirve los archivos
+        estaticos en el puerto <code>80</code>.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>front/premier-hub-frontend/pagina/Dockerfile</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>16. Por que el frontend usa build args?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Vite inyecta variables <code>VITE_*</code> al momento de compilar. Por eso el pipeline pasa
+        <code>VITE_API_URL</code>, <code>VITE_APP_URL</code> y <code>VITE_SUPABASE_URL</code> como build args.
+        Asi el bundle de preprod apunta a servicios preprod y el de prod apunta a servicios prod.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> workflows del frontend con URLs <code>api-preprod.zamer-o.com</code> y <code>api.zamer-o.com</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>17. Que hace la configuracion de Nginx del frontend?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Sirve el frontend estatico y soporta rutas de React Router con <code>try_files $uri $uri/ /index.html</code>.
+        Tambien configura cache: evita cache fuerte para la app principal y permite cache largo para
+        <code>/assets</code>, que normalmente son archivos versionados por hash.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>pagina/nginx.conf</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>18. Que variables de entorno usa el backend?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Usa variables para base de datos, sesiones, CORS y APIs externas: <code>SUPABASE_URL</code>,
+        <code>SUPABASE_SERVICE_KEY</code>, <code>COOKIE_SECRET</code>, <code>CORS_ORIGIN</code>,
+        <code>DEV_CORS_ORIGIN</code>, <code>APIFOOTBALL_KEY</code>, <code>NEWS_API_KEY</code>,
+        <code>NODE_ENV</code>, <code>PORT</code>, entre otras.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> busqueda de <code>process.env</code> en <code>api/src</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>19. Que diferencia hay entre Secret y ConfigMap?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Un Secret se usa para datos sensibles como llaves, tokens y claves de cookies. Un ConfigMap se usa
+        para configuracion no sensible como puertos, URLs publicas o banderas de ambiente. En Premier Hub,
+        <code>SUPABASE_SERVICE_KEY</code>, <code>COOKIE_SECRET</code>, <code>NEWS_API_KEY</code> y
+        <code>APIFOOTBALL_KEY</code> deberian ser Secrets. <code>PORT</code> o <code>CORS_ORIGIN</code>
+        podrian ser ConfigMap, aunque CORS tambien puede tratarse con cuidado por seguridad.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> variables leidas en <code>api/src/db.ts</code>, <code>api/src/index.ts</code> y rutas.</p>
+    </div>
+
+    <div class="question">
+      <h3>20. Donde se conectan a Supabase?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        La conexion esta centralizada en <code>api/src/db.ts</code>. Se crea un cliente Supabase con
+        <code>SUPABASE_URL</code> y <code>SUPABASE_SERVICE_KEY</code>, usando el schema <code>premier</code>.
+        El service key es sensible porque puede tener permisos elevados, por eso debe ir como Secret.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_KEY!, ...)</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>21. Como manejan CORS?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Express usa el middleware <code>cors</code>. El origen permitido viene de <code>CORS_ORIGIN</code>
+        o <code>DEV_CORS_ORIGIN</code>, con fallback a <code>http://localhost:5173</code>. Tambien habilita
+        <code>credentials: true</code> porque la app usa cookies de sesion.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> configuracion de <code>cors</code> en <code>api/src/index.ts</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>22. Como se maneja la autenticacion de sesion?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        El backend usa una cookie llamada <code>ph_session</code>. La cookie es <code>httpOnly</code>,
+        firmada con <code>COOKIE_SECRET</code>, tiene <code>sameSite: "lax"</code> y en produccion se marca
+        como <code>secure</code>. Esto reduce el riesgo de que JavaScript del navegador lea la sesion.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>setSessionCookie</code> en <code>api/src/rutas/api_auth.ts</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>23. Que endpoint sirve como health check?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        El endpoint <code>GET /api/health</code>. Responde JSON con <code>{ status: "ok" }</code>.
+        Sirve para comprobar que el proceso Express esta vivo. Como mejora, podria validar tambien
+        dependencias criticas como Supabase.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> ruta en <code>api/src/index.ts</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>24. Health check y readiness check son lo mismo?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        No. Un liveness check responde si el proceso esta vivo. Un readiness check responde si la app esta
+        lista para recibir trafico. Nuestro <code>/api/health</code> es basico: confirma que Express responde,
+        pero no comprueba si Supabase o APIs externas estan disponibles. Para produccion seria ideal separar
+        <code>/health/live</code> y <code>/health/ready</code>.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> endpoint actual solo devuelve <code>status: "ok"</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>25. Como harias rollback si el deploy falla?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Primero revisaria el rollout con <code>kubectl rollout status</code>. Si la version nueva falla,
+        usaria <code>kubectl rollout undo deployment/api -n prod</code> para regresar al ReplicaSet anterior.
+        Tambien puedo redeployar una imagen anterior porque las imagenes estan etiquetadas con SHA.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> despliegue con SHA y uso de Kubernetes Deployment.</p>
+    </div>
+
+    <div class="question">
+      <h3>26. Que pasa si el build de Docker falla?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        El pipeline se detiene antes de tocar Kubernetes. Eso evita desplegar una version que ni siquiera
+        compila. En backend, <code>npm run build</code> ejecuta TypeScript; en frontend, el build ejecuta
+        <code>tsc && vite build</code>.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> scripts <code>build</code> en <code>package.json</code> y Dockerfiles.</p>
+    </div>
+
+    <div class="question">
+      <h3>27. Que pasa si la imagen se construye pero el pod no levanta?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Kubernetes intentara crear pods nuevos, pero el rollout no terminara correctamente. El workflow
+        espera hasta 120 segundos. Para diagnosticar, revisaria <code>kubectl describe pod</code>,
+        <code>kubectl logs</code> y eventos del namespace. Causas comunes: variables faltantes, error al
+        arrancar Node, imagen no disponible o puertos mal configurados.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>rollout status --timeout=120s</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>28. Como verificarias que el deploy funciono?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Revisaria que el workflow haya terminado exitosamente, que el rollout este completo, que los pods
+        esten en estado Running y que <code>/api/health</code> responda. Tambien probaria una ruta funcional
+        como login, noticias o partidos dependiendo del cambio.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> GitHub Actions, <code>kubectl get pods -n prod</code>, <code>curl https://api.zamer-o.com/api/health</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>29. Que observabilidad tiene el proyecto?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Actualmente tiene logs por consola, errores con <code>console.error</code>, health check y validacion
+        de rollout en CI/CD. Eso da una base operativa, pero no es observabilidad completa. Como mejora,
+        agregaria logs centralizados, metricas de latencia/error rate, dashboard y alertas.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>console.log</code>, <code>console.error</code>, <code>/api/health</code>, <code>rollout status</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>30. Que metricas monitorearias en produccion?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Monitorearia disponibilidad del health check, latencia p95, tasa de errores 4xx/5xx, CPU y memoria
+        de pods, reinicios, tiempo de respuesta de Supabase, errores de APIs externas y duracion de rollout.
+        Para producto, tambien monitorearia endpoints criticos: auth, ranking, noticias, partidos y live.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> rutas montadas en <code>api/src/index.ts</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>31. Que logs revisarias ante una falla?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Revisaria logs del workflow, eventos de Kubernetes, logs del pod del backend y errores de Supabase
+        o APIs externas. Si falla auth, revisaria cookies y variables de sesion. Si fallan noticias o partidos,
+        revisaria las llaves <code>NEWS_API_KEY</code> o <code>APIFOOTBALL_KEY</code>.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>kubectl logs deployment/api -n prod</code>, logs de GitHub Actions.</p>
+    </div>
+
+    <div class="question">
+      <h3>32. Que medidas de seguridad ya existen?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Las sesiones usan cookies <code>httpOnly</code> y firmadas. En produccion se usa <code>secure</code>.
+        CORS esta configurado por ambiente. Los secretos se leen por variables de entorno. Ademas, el
+        frontend no deberia recibir llaves privadas; solo recibe URLs publicas de ambiente.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>api_auth.ts</code>, <code>index.ts</code>, Dockerfile del frontend con <code>VITE_*</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>33. Cual es el riesgo de <code>SUPABASE_SERVICE_KEY</code>?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Es una llave sensible del backend. Si se expone, alguien podria tener permisos elevados sobre la
+        base de datos. Por eso solo debe vivir en el servidor, inyectada como Secret, nunca en el frontend,
+        nunca en el repositorio y nunca en logs.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>api/src/db.ts</code> usa <code>SUPABASE_SERVICE_KEY</code>; frontend solo recibe <code>VITE_SUPABASE_URL</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>34. Por que no se deben guardar secretos en Git?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Porque Git conserva historial. Aunque borres un secreto del archivo, puede quedar en commits
+        anteriores. La practica correcta es usar variables de entorno, GitHub Secrets, Kubernetes Secrets
+        o un gestor de secretos.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> el codigo usa <code>process.env</code> en vez de llaves hardcodeadas.</p>
+    </div>
+
+    <div class="question">
+      <h3>35. Que es infraestructura como codigo y que tiene el proyecto?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Infraestructura como codigo significa versionar la definicion de infraestructura, por ejemplo
+        Deployments, Services, Ingress, Secrets templates o Terraform. En este repo si estan versionados
+        los Dockerfiles y workflows de CI/CD, pero no vi manifests de Kubernetes ni Terraform. Como mejora,
+        agregaria manifests o Helm/Kustomize para que la infraestructura tambien sea reproducible desde Git.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> existen <code>Dockerfile</code> y <code>.github/workflows</code>; no aparecen <code>*.yaml</code> de Kubernetes en el repo.</p>
+    </div>
+
+    <div class="question">
+      <h3>36. Como manejan imagenes Docker?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        El pipeline construye imagenes locales y las etiqueta por SHA. Luego las importa al runtime de K3s.
+        Para backend la imagen es <code>premier-api</code>; para frontend es <code>premier-pagina</code>.
+        Actualmente no se ve un registry externo; como mejora se podria usar GHCR o Docker Hub privado para
+        trazabilidad, retencion y despliegues mas estandar.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>docker build -t premier-api:${{ github.sha }}</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>37. Que ventaja tiene usar Kubernetes/K3s?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Kubernetes administra el estado deseado: si actualizo la imagen de un Deployment, crea pods nuevos
+        y reemplaza gradualmente los anteriores. K3s es una distribucion ligera de Kubernetes, util para
+        proyectos o clusters mas pequenos. Nos da namespaces, rollouts y rollback.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> uso de <code>kubectl set image</code> y namespaces <code>preprod/prod</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>38. Como se separan los recursos entre ambientes?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        La separacion visible esta en namespaces: <code>preprod</code> y <code>prod</code>. Eso permite tener
+        Deployments, Services y configuracion separados aunque usen nombres similares. Tambien el frontend
+        apunta a dominios diferentes por ambiente.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>-n preprod</code> y <code>-n prod</code> en workflows.</p>
+    </div>
+
+    <div class="question">
+      <h3>39. Que pasa con la base de datos en un deploy?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        El deploy de la aplicacion no recrea la base de datos. La app se conecta a Supabase por variables de
+        entorno. Si hay cambios de schema, deben aplicarse de forma controlada con scripts SQL o migraciones.
+        En el repo hay archivos SQL para tablas como cache de noticias y features live.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> carpeta <code>api/sql</code> y cliente Supabase en <code>api/src/db.ts</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>40. Como respaldarian datos?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Como la base esta en Supabase/Postgres, el respaldo debe hacerse a nivel de base de datos: backups
+        automaticos del proveedor, snapshots programados, exportaciones SQL o dumps antes de migraciones
+        riesgosas. Para archivos en buckets, tambien se debe considerar respaldo o politica de retencion.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> uso de Supabase y buckets como <code>profilePictures</code> en auth.</p>
+    </div>
+
+    <div class="question">
+      <h3>41. Como harias una migracion segura de base de datos?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Primero aplicaria la migracion en preprod, validaria que el backend funcione, haria backup antes de
+        produccion y disenaria cambios compatibles hacia atras cuando sea posible. Por ejemplo, agregar una
+        columna antes de hacer que el codigo dependa obligatoriamente de ella. Despues desplegaria app y
+        schema en orden controlado.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> archivos SQL en <code>api/sql</code>; separacion preprod/prod.</p>
+    </div>
+
+    <div class="question">
+      <h3>42. Que dependencias externas tiene la app?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Depende de Supabase para datos y almacenamiento, API-Football para partidos, NewsAPI para noticias,
+        y sitios externos para scraping de articulos. Estas dependencias afectan disponibilidad, por eso
+        hay que manejar errores, timeouts y cache.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>api_partidos.ts</code>, <code>api_noticias.ts</code>, <code>db.ts</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>43. Como reducen el impacto de APIs externas?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        En noticias hay cache en memoria y cache persistido en Supabase con expiracion. Tambien hay fallback:
+        si falla refrescar noticias pero existe una version cacheada, se puede responder cache stale. Eso
+        mejora resiliencia y reduce llamadas a APIs externas.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>NEWS_CACHE_TTL_MS</code>, <code>readNewsSnapshot</code>, <code>persistNewsSnapshot</code>, <code>fallback: true</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>44. Que riesgos ves en el deploy actual?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        El flujo funciona, pero tiene mejoras posibles: no se ven tests automatizados antes del deploy,
+        no se ven manifests de Kubernetes versionados, no se ve registry externo, el health check es basico,
+        y la observabilidad podria ser mas completa. Tambien revisaria que Secrets y ConfigMaps esten bien
+        configurados en el cluster.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> workflows solo tienen build/deploy; no hay manifests Kubernetes en el repo.</p>
+    </div>
+
+    <div class="question">
+      <h3>45. Que mejorarias si tuvieras mas tiempo?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Agregaria pruebas automatizadas al pipeline, manifests Kubernetes versionados con Helm o Kustomize,
+        registry de imagenes, health checks separados para liveness/readiness, monitoreo con metricas,
+        alertas, politicas de backup documentadas y escaneo de vulnerabilidades de imagenes.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> mejora propuesta basada en gaps reales del repo.</p>
+    </div>
+
+    <div class="question">
+      <h3>46. Como explicarias el deploy del frontend en una frase?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        El frontend se compila con Vite usando variables del ambiente, se empaqueta en una imagen Nginx y
+        se despliega a K3s igual que el backend, cambiando el deployment <code>pagina</code> del namespace
+        correspondiente.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> Dockerfile multi-stage y workflows del frontend.</p>
+    </div>
+
+    <div class="question">
+      <h3>47. Como explicarias el deploy del backend en una frase?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        El backend TypeScript se compila dentro de una imagen Node, se etiqueta con el SHA del commit, se
+        importa a K3s y se publica actualizando el deployment <code>api</code> en <code>preprod</code> o
+        <code>prod</code>.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>api/Dockerfile</code> y workflows del backend.</p>
+    </div>
+
+    <div class="question">
+      <h3>48. Si el profe pregunta "donde esta Kubernetes?", que respondes?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        En el repositorio no estan los manifests del cluster, pero el pipeline interactua con Kubernetes/K3s
+        mediante <code>kubectl</code>. Eso demuestra que los deployments <code>api</code> y <code>pagina</code>
+        ya existen en los namespaces <code>preprod</code> y <code>prod</code>. Como mejora, esos manifests
+        deberian versionarse como infraestructura como codigo.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> comandos <code>kubectl set image</code> en workflows.</p>
+    </div>
+
+    <div class="question">
+      <h3>49. Como sabes que version esta corriendo?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Por la etiqueta de imagen que se puso en el Deployment. Como el pipeline usa el SHA del commit,
+        puedo revisar la imagen del deployment y mapearla al commit exacto en GitHub.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>kubectl describe deployment/api -n prod</code> mostraria <code>premier-api:&lt;sha&gt;</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>50. Que significa despliegue reproducible?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Que puedo reconstruir y desplegar la misma version de forma consistente. En este proyecto, el SHA
+        ayuda a identificar la version, Docker define el ambiente de ejecucion y GitHub Actions define los
+        pasos. Para que fuera mas completo, faltaria versionar tambien los manifests de Kubernetes.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> Dockerfiles, workflows y tags por SHA.</p>
+    </div>
+
+    <div class="question">
+      <h3>51. Como se protegen contra cambios accidentales en produccion?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        La separacion de ramas ayuda: primero se puede probar en <code>preprod</code> y solo despues mezclar
+        o subir a <code>main</code>. Idealmente se complementa con branch protection, pull requests, reviews
+        y aprobaciones manuales para ambientes productivos.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> workflows separados por rama.</p>
+    </div>
+
+    <div class="question">
+      <h3>52. Que diferencia hay entre variables de build y variables de runtime?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Las variables de build se usan al construir la imagen. En el frontend, <code>VITE_API_URL</code> se
+        queda dentro del bundle generado. Las variables de runtime se leen cuando arranca el contenedor.
+        En backend, <code>SUPABASE_SERVICE_KEY</code> o <code>PORT</code> se leen al ejecutar Node.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> Dockerfile frontend usa <code>ARG</code>; backend usa <code>process.env</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>53. Que pasa si cambia la URL de la API en frontend?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Como Vite inyecta las variables al build, hay que reconstruir y redeplegar la imagen del frontend.
+        No basta con cambiar una variable de runtime si el valor ya quedo compilado en los archivos estaticos.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>ARG VITE_API_URL</code> y <code>ENV VITE_API_URL=$VITE_API_URL</code> en Dockerfile frontend.</p>
+    </div>
+
+    <div class="question">
+      <h3>54. Como explicas el manejo de cache del frontend?</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        Nginx evita cache fuerte para rutas principales para que el usuario reciba la app actualizada, pero
+        permite cache largo en <code>/assets</code> porque esos archivos suelen tener hash en el nombre y
+        pueden cachearse de forma segura.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> <code>Cache-Control "no-cache"</code> en <code>/</code> y <code>immutable</code> en <code>/assets/</code>.</p>
+    </div>
+
+    <div class="question">
+      <h3>55. Como responder si preguntan "esta todo perfecto?"</h3>
+      <p><span class="label">Respuesta:</span></p>
+      <p class="answer">
+        No diria que esta perfecto; diria que el flujo base esta funcionando y cubre multientorno, imagenes,
+        rollout y configuracion por variables. Pero tambien identifico mejoras: pruebas en pipeline,
+        manifests versionados, observabilidad formal, escaneo de imagenes y documentacion de backups.
+        Esa respuesta muestra criterio tecnico.
+      </p>
+      <p><span class="label">Evidencia esperada:</span> mencionar fortalezas y gaps reales, sin inventar herramientas no existentes.</p>
+    </div>
+  </section>
+
+  <section class="page-break">
+    <h2>Comandos utiles para mencionar</h2>
+    <pre>Ver estado de pods:
+kubectl get pods -n prod
+kubectl get pods -n preprod
+
+Ver rollout:
+kubectl rollout status deployment/api -n prod
+kubectl rollout status deployment/pagina -n prod
+
+Rollback:
+kubectl rollout undo deployment/api -n prod
+kubectl rollout undo deployment/pagina -n prod
+
+Logs:
+kubectl logs deployment/api -n prod
+kubectl logs deployment/pagina -n prod
+
+Ver imagen desplegada:
+kubectl describe deployment/api -n prod
+kubectl describe deployment/pagina -n prod
+
+Probar health check:
+curl https://api.zamer-o.com/api/health
+curl https://api-preprod.zamer-o.com/api/health</pre>
+
+    <h2>Respuestas cortas para memorizar</h2>
+    <table>
+      <thead>
+      <tr>
+        <th>Si te preguntan...</th>
+        <th>Responde...</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td>Como despliegan?</td>
+        <td>Con GitHub Actions self-hosted, Docker y K3s. El pipeline construye la imagen, la etiqueta con SHA, la importa a K3s y actualiza el Deployment.</td>
+      </tr>
+      <tr>
+        <td>Como separan ambientes?</td>
+        <td>Por rama, namespace y URLs. <code>preprod</code> va a namespace <code>preprod</code>; <code>main</code> va a <code>prod</code>.</td>
+      </tr>
+      <tr>
+        <td>Como hacen rollback?</td>
+        <td>Con <code>kubectl rollout undo</code> o redeployando una imagen anterior identificada por SHA.</td>
+      </tr>
+      <tr>
+        <td>Donde estan los secretos?</td>
+        <td>El codigo los lee por variables de entorno; en Kubernetes deberian inyectarse como Secrets.</td>
+      </tr>
+      <tr>
+        <td>Como verifican salud?</td>
+        <td>Con <code>/api/health</code>, rollout status, estado de pods y pruebas funcionales.</td>
+      </tr>
+      <tr>
+        <td>Que falta mejorar?</td>
+        <td>Tests en pipeline, IaC completa, registry externo, observabilidad avanzada, escaneo de imagenes y backups documentados.</td>
+      </tr>
+      </tbody>
+    </table>
+
+    <h2>Evidencia del repo que debes saber ubicar</h2>
+    <ul>
+      <li><code>back/premier-hub-backend/.github/workflows/deploy.yml</code>: deploy backend a produccion.</li>
+      <li><code>back/premier-hub-backend/.github/workflows/deploy-preprod.yml</code>: deploy backend a preproduccion.</li>
+      <li><code>back/premier-hub-backend/api/Dockerfile</code>: imagen del backend.</li>
+      <li><code>back/premier-hub-backend/api/src/index.ts</code>: puerto, CORS, rutas y health check.</li>
+      <li><code>back/premier-hub-backend/api/src/db.ts</code>: conexion a Supabase con variables de entorno.</li>
+      <li><code>back/premier-hub-backend/api/src/rutas/api_auth.ts</code>: cookie de sesion segura.</li>
+      <li><code>front/premier-hub-frontend/.github/workflows/deploy.yml</code>: deploy frontend a produccion.</li>
+      <li><code>front/premier-hub-frontend/.github/workflows/deploy-preprod.yml</code>: deploy frontend a preproduccion.</li>
+      <li><code>front/premier-hub-frontend/pagina/Dockerfile</code>: build multi-stage del frontend.</li>
+      <li><code>front/premier-hub-frontend/pagina/nginx.conf</code>: SPA routing y cache.</li>
+    </ul>
+
+    <div class="callout warning">
+      <strong>Consejo para la entrevista:</strong>
+      No inventes que tienen Terraform, Prometheus, Grafana, Helm o registry si el profe pide evidencia.
+      Puedes decir: "Eso seria una mejora; lo que actualmente tenemos versionado es Dockerfile y GitHub Actions,
+      y el pipeline interactua con K3s por kubectl".
+    </div>
+  </section>
+</main>
+</body>
+</html>

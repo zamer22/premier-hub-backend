@@ -9,6 +9,7 @@ const SESSION_COOKIE_NAME = "ph_session";
 const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 días
 const SESSION_COOKIE_PATH = "/";
 const INITIAL_MONEY = 1000;
+const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
 /*
 ----------------------------------------------------------------------------
@@ -86,8 +87,8 @@ La opción sameSite se establece en 'lax' para ayudar a prevenir ataques CSRF.
 function setSessionCookie(response: Response, userId: number): void {
   response.cookie(SESSION_COOKIE_NAME, String(userId), {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
+    secure: IS_PRODUCTION,
+    sameSite: IS_PRODUCTION ? "none" : "lax",
     signed: true,
     maxAge: SESSION_DURATION_MS,
     path: SESSION_COOKIE_PATH,
@@ -104,6 +105,8 @@ Utiliza el método clearCookie de Express, especificando el mismo nombre y ruta 
 */
 function clearSessionCookie(response: Response): void {
   response.clearCookie(SESSION_COOKIE_NAME, {
+    secure: IS_PRODUCTION,
+    sameSite: IS_PRODUCTION ? "none" : "lax",
     path: SESSION_COOKIE_PATH,
   });
 }
