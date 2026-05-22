@@ -82,6 +82,7 @@ export async function footballFetch<T = unknown>(
 
   const response = await fetch(url.toString(), {
     headers: getApiFootballHeaders(),
+    signal: AbortSignal.timeout(12_000),
   });
 
   const data = (await response.json()) as FootballApiResponse<T>;

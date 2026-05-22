@@ -18,6 +18,7 @@ import historiaRouter from "./rutas/historia";
 import historialRouter from "./rutas/partidosPasados";
 import adminRouter from "./rutas/api_admin";
 import missingXIRouter from "./rutas/api_missing_xi";
+import mlRouter from "./rutas/api_ml";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
@@ -45,6 +46,7 @@ app.use("/api/partidos/historial", historialRouter);
 /* Pon admin antes de routers generales /api */
 app.use("/api/admin", adminRouter);
 app.use("/api/missing-xi", missingXIRouter);
+app.use("/api/ml", mlRouter);
 
 /* Estos van después porque son más generales */
 app.use("/api", partidosRouter);
