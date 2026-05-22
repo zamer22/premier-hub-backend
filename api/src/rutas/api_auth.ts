@@ -245,18 +245,26 @@ router.get("/me", async (req: Request, res: Response) => {
     return;
   }
 
-  const { data: user, error } = await supabase
-    .from("usuario")
-    .select("*")
-    .eq("id_usuario", sessionUserId)
-    .maybeSingle();
+  // Si Supabase no responde en 10s devolvemos 503 en lugar de colgar al cliente
+  const timeoutGuard = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("db_timeout")), 10_000)
+  );
 
-  if (error || !user) {
-    res.status(401).json({ success: false });
-    return;
+  try {
+    const { data: user, error } = await Promise.race([
+      supabase.from("usuario").select("*").eq("id_usuario", sessionUserId).maybeSingle(),
+      timeoutGuard,
+    ]);
+
+    if (error || !user) {
+      res.status(401).json({ success: false });
+      return;
+    }
+
+    res.json({ success: true, user });
+  } catch {
+    res.status(503).json({ success: false });
   }
-
-  res.json({ success: true, user });
 });
 
 /* 
