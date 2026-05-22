@@ -5,18 +5,24 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-import authRouter from "./rutas/api_auth";
-import rankingRouter from "./rutas/api_ranking";
-import simuladorRouter from "./rutas/api_simulador";
+import { authRouter } from "./rutas/api_auth";
+import { rankingRouter } from "./rutas/api_ranking";
+import { simuladorRouter } from "./rutas/api_simulador";
 import partidosRouter from "./rutas/api_partidos";
-import noticiasRouter from "./rutas/api_noticias";
-import tiendaRouter from "./rutas/api_tienda_v2";
-import marketplaceRouter from "./rutas/api_marketplace";
-
-import { liveRouter, startFixtureAutoSync } from "./liveSync";
+import { noticiasRouter } from "./rutas/api_noticias";
+import { tiendaRouter } from "./rutas/api_tienda_v2";
+import { marketplaceRouter } from "./rutas/api_marketplace";
+import wordleRouter from "./rutas/api_wordle";
+import { liveRouter, startFixtureAutoSync } from "./rutas/liveSync";
+import historiaRouter from "./rutas/historia";
+import historialRouter from "./rutas/partidosPasados";
+import adminRouter from "./rutas/api_admin";
+import missingXIRouter from "./rutas/api_missing_xi";
+import mlRouter from "./rutas/api_ml";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
+
 app.use(
   cors({
     origin: process.env.CORS_ORIGIN || process.env.DEV_CORS_ORIGIN || "http://localhost:5173",
@@ -25,16 +31,26 @@ app.use(
 );
 
 app.use(cookieParser(process.env.COOKIE_SECRET));
-app.use(express.json());
+app.use(express.json({ limit: "8mb" }));
 
 app.use("/api/auth", authRouter);
 app.use("/api/ranking", rankingRouter);
 app.use("/api/simulador", simuladorRouter);
-app.use("/api/partidos", partidosRouter);
-app.use("/api", liveRouter);
 app.use("/api/noticias", noticiasRouter);
 app.use("/api/tienda", tiendaRouter);
 app.use("/api/marketplace", marketplaceRouter);
+app.use("/api/wordle", wordleRouter);
+app.use("/api/historia", historiaRouter);
+app.use("/api/partidos/historial", historialRouter);
+
+/* Pon admin antes de routers generales /api */
+app.use("/api/admin", adminRouter);
+app.use("/api/missing-xi", missingXIRouter);
+app.use("/api/ml", mlRouter);
+
+/* Estos van después porque son más generales */
+app.use("/api", partidosRouter);
+app.use("/api", liveRouter);
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
