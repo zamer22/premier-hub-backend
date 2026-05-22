@@ -19,9 +19,9 @@ import historialRouter from "./rutas/partidosPasados";
 import adminRouter from "./rutas/api_admin";
 import missingXIRouter from "./rutas/api_missing_xi";
 
-
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
+
 app.use(
   cors({
     origin: process.env.CORS_ORIGIN || "http://localhost:5173",
@@ -35,16 +35,20 @@ app.use(express.json({ limit: "8mb" }));
 app.use("/api/auth", authRouter);
 app.use("/api/ranking", rankingRouter);
 app.use("/api/simulador", simuladorRouter);
-app.use("/api", partidosRouter);
-app.use("/api", liveRouter);
 app.use("/api/noticias", noticiasRouter);
 app.use("/api/tienda", tiendaRouter);
 app.use("/api/marketplace", marketplaceRouter);
 app.use("/api/wordle", wordleRouter);
-app.use("/api/historia",           historiaRouter);
+app.use("/api/historia", historiaRouter);
 app.use("/api/partidos/historial", historialRouter);
+
+/* Pon admin antes de routers generales /api */
 app.use("/api/admin", adminRouter);
 app.use("/api/missing-xi", missingXIRouter);
+
+/* Estos van después porque son más generales */
+app.use("/api", partidosRouter);
+app.use("/api", liveRouter);
 
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
