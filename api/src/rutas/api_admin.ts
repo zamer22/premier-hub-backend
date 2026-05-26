@@ -292,8 +292,9 @@ router.put("/pedido/:id_pedido", async (req, res) => {
   res.json({ success: true, data });
 });
 
-/* ====================== PRODUCTOS ADMIN ====================== */
 
+
+// Crear producto/ver en lista
 router.get("/productos", async (_req, res) => {
   const { data, error } = await supabase
     .from("producto")
@@ -375,8 +376,8 @@ router.get("/marketplace/catalogo", async (_req, res) => {
   });
 });
 
-/* ====================== MARKETPLACE ADMIN ====================== */
-
+/*  MARKETPLACE ADMIN  */
+// listado actual de marketplace
 router.get("/marketplace/listados", async (req, res) => {
   const { estado, q } = req.query;
 
@@ -419,6 +420,9 @@ router.get("/marketplace/listados", async (req, res) => {
   res.json({ success: true, data: result });
 });
 
+
+
+// publicar a markett
 router.post("/marketplace/publicar", async (req, res) => {
   const { id_admin, id_producto, precio } = req.body;
 
@@ -505,6 +509,9 @@ router.post("/marketplace/publicar", async (req, res) => {
   }
 });
 
+
+
+// borrar objeto/cancelarlo
 router.delete("/marketplace/cancelar/:id_listado", async (req, res) => {
   const id_listado = Number(req.params.id_listado);
 
