@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 
 import supabase from "../db";
+import { getSessionUserId } from "../middleware/requireAuth";
 
 const router = Router();
 
@@ -114,19 +115,6 @@ function clearSessionCookie(response: Response): void {
     sameSite: IS_PRODUCTION ? "none" : "lax",
     path: SESSION_COOKIE_PATH,
   });
-}
-
-function getSessionUserId(req: Request): number | null {
-  const sessionUserId = (
-    req.signedCookies as Record<string, string | undefined>
-  )?.[SESSION_COOKIE_NAME];
-
-  if (!sessionUserId) {
-    return null;
-  }
-
-  const parsed = Number(sessionUserId);
-  return Number.isNaN(parsed) ? null : parsed;
 }
 
 function parseDataUrl(value: string): { buffer: Buffer; contentType: string; extension: string } {
