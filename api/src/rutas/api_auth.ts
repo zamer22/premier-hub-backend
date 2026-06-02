@@ -467,11 +467,8 @@ router.post(
         return;
       }
 
-      const { data: publicUrlData } = supabase.storage
-        .from(PROFILE_PICTURES_BUCKET)
-        .getPublicUrl(path);
-
-      const publicUrl = publicUrlData.publicUrl;
+      const supabasePublicBase = (process.env.SUPABASE_PUBLIC_URL || process.env.SUPABASE_URL!).replace(/\/$/, "");
+      const publicUrl = `${supabasePublicBase}/storage/v1/object/public/${PROFILE_PICTURES_BUCKET}/${path}`;
       const { data: updatedUser, error: updateError } = await supabase
         .from("usuario")
         .update({ foto_perfil: publicUrl })
