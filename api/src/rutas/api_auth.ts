@@ -2,6 +2,8 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 
 import supabase from "../db";
+import { getSessionUserId } from "../middleware/requireAuth";
+import { accountDeleteLimiter, authLimiter } from "../middleware/rateLimit";
 
 const router = Router();
 
@@ -41,6 +43,7 @@ interface GoogleRegisterRequestBody {
 
 interface DeleteAccountRequestBody {
   confirmacion: string;
+  contrasena?: string;
 }
 
 interface ProfileUpdateRequestBody {
@@ -114,19 +117,6 @@ function clearSessionCookie(response: Response): void {
     sameSite: IS_PRODUCTION ? "none" : "lax",
     path: SESSION_COOKIE_PATH,
   });
-}
-
-function getSessionUserId(req: Request): number | null {
-  const sessionUserId = (
-    req.signedCookies as Record<string, string | undefined>
-  )?.[SESSION_COOKIE_NAME];
-
-  if (!sessionUserId) {
-    return null;
-  }
-
-  const parsed = Number(sessionUserId);
-  return Number.isNaN(parsed) ? null : parsed;
 }
 
 function parseDataUrl(value: string): { buffer: Buffer; contentType: string; extension: string } {
@@ -548,6 +538,7 @@ router.post(
 
 router.delete(
   "/account",
+  accountDeleteLimiter,
   async (req: Request<{}, {}, DeleteAccountRequestBody>, res: Response) => {
     const userId = getSessionUserId(req);
 
@@ -558,7 +549,7 @@ router.delete(
 
     const { data: user, error: userError } = await supabase
       .from("usuario")
-      .select("id_usuario,nickname")
+      .select("id_usuario, nickname, correo, contrasena")
       .eq("id_usuario", userId)
       .maybeSingle();
 
@@ -568,13 +559,44 @@ router.delete(
       return;
     }
 
-    const expectedConfirmation = `ELIMINAR ${user.nickname}`;
-    if (req.body.confirmacion !== expectedConfirmation) {
-      res.status(400).json({
-        success: false,
-        error: "La confirmacion no coincide",
+    // Los usuarios con cuenta de correo+contrasena tienen contrasena con hash bcrypt.
+    // Los usuarios de Google tienen contrasena vacia: para ellos no podemos pedir
+    // password porque no la tienen, asi que conservamos el check de confirmacion
+    // como guardrail de UI (no es un control de seguridad fuerte, pero es lo que
+    // se puede sin meter re-auth con Google OAuth).
+    const usaContrasena = typeof user.contrasena === "string" && user.contrasena.length > 0;
+
+    if (usaContrasena) {
+      const contrasena = req.body.contrasena;
+      if (!contrasena || typeof contrasena !== "string") {
+        res.status(400).json({
+          success: false,
+          error: "Necesitas tu contrasena para eliminar la cuenta",
+        });
+        return;
+      }
+
+      const { data: loginResult, error: loginErr } = await supabase.rpc("fn_login", {
+        p_identificador: user.correo,
+        p_contrasena: contrasena,
       });
-      return;
+
+      if (loginErr || !loginResult?.success) {
+        res.status(400).json({
+          success: false,
+          error: "Contrasena incorrecta",
+        });
+        return;
+      }
+    } else {
+      const expectedConfirmation = `ELIMINAR ${user.nickname}`;
+      if (req.body.confirmacion !== expectedConfirmation) {
+        res.status(400).json({
+          success: false,
+          error: "La confirmacion no coincide",
+        });
+        return;
+      }
     }
 
     const { data: inventoryItems, error: inventoryLookupError } = await supabase
@@ -626,6 +648,7 @@ Esta ruta maneja el inicio de sesión con correo electrónico y contraseña.
 */
 router.post(
   "/login",
+  authLimiter,
   async (req: Request<{}, {}, LoginRequestBody>, res: Response) => {
     const { correo, contrasena } = req.body;
 
@@ -665,6 +688,7 @@ Esta ruta maneja el registro de nuevos usuarios con correo electrónico y contra
 */
 router.post(
   "/registro",
+  authLimiter,
   async (req: Request<{}, {}, RegistroRequestBody>, res: Response) => {
     const { correo, nombre_usuario, nickname, contrasena } = req.body;
 
@@ -707,6 +731,7 @@ Si el usuario no existe, se devuelve un mensaje indicando que es un nuevo usuari
 */
 router.post(
   "/google-sync",
+  authLimiter,
   async (req: Request<{}, {}, GoogleSyncRequestBody>, res: Response) => {
     const { access_token: accessToken } = req.body;
 
@@ -787,6 +812,7 @@ Después de registrar al usuario, establece una sesión y devuelve la informaci�
 */
 router.post(
   "/google-register",
+  authLimiter,
   async (req: Request<{}, {}, GoogleRegisterRequestBody>, res: Response) => {
     const { correo, nombre_usuario: nombre, nickname, foto_perfil_url: avatarUrl } = req.body;
 
