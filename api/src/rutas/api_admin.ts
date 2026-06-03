@@ -1,4 +1,5 @@
 import { Router, Request, Response, NextFunction } from "express";
+import multer from "multer";
 import supabase from "../db";
 
 const router = Router();
@@ -40,8 +41,21 @@ const ADMIN_LISTADO_FIELDS = `
 
 const ESTADOS_VALIDOS = ["procesando", "enviado", "en_camino", "entregado", "cancelado"];
 
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 6 * 1024 * 1024,
+  },
+});
+
+const PRODUCTOS_BUCKET = "productosMarketplace";
+
 async function verificarAdmin(req: Request, res: Response, next: NextFunction) {
-  const idRaw = (req.query.id_usuario ?? req.body?.id_usuario ?? req.header("x-id-usuario")) as string | number | undefined;
+  const idRaw = (req.query.id_usuario ?? req.body?.id_usuario ?? req.header("x-id-usuario")) as
+    | string
+    | number
+    | undefined;
+
   const id = idRaw != null ? Number(idRaw) : NaN;
 
   if (!id || Number.isNaN(id)) {
@@ -115,8 +129,8 @@ async function normalizarListados(rows: any[]) {
     new Set(
       rows
         .map((l: any) => Number(l.id_vendedor))
-        .filter((id: number) => Number.isFinite(id) && id > 0)
-    )
+        .filter((id: number) => Number.isFinite(id) && id > 0),
+    ),
   );
 
   const vendedoresById: Record<number, string | null> = {};
@@ -134,7 +148,7 @@ async function normalizarListados(rows: any[]) {
     });
   }
 
-  return rows.map(l => normalizarListado(l, vendedoresById));
+  return rows.map((l) => normalizarListado(l, vendedoresById));
 }
 
 /* ====================== PEDIDOS ADMIN ====================== */
@@ -192,14 +206,7 @@ router.get("/pedido/:id_pedido", async (req, res) => {
 
 router.put("/pedido/:id_pedido", async (req, res) => {
   const id_pedido = Number(req.params.id_pedido);
-  const {
-    estado,
-    lat_actual,
-    lng_actual,
-    tracking_numero,
-    fecha_estimada,
-    notas_admin,
-  } = req.body;
+  const { estado, lat_actual, lng_actual, tracking_numero, fecha_estimada, notas_admin } = req.body;
 
   const { data: pedidoActual, error: fetchErr } = await supabase
     .from("pedido")
@@ -308,6 +315,57 @@ router.get("/productos", async (_req, res) => {
   });
 });
 
+router.post("/productos/imagen", upload.single("imagen"), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({
+      success: false,
+      error: "Falta imagen",
+    });
+  }
+
+  const allowedTypes: Record<string, string> = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+  };
+
+  const extension = allowedTypes[req.file.mimetype];
+
+  if (!extension) {
+    return res.status(400).json({
+      success: false,
+      error: "Formato de imagen no permitido. Usa JPG, PNG, WEBP o GIF.",
+    });
+  }
+
+  const filePath = `productos/${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}.${extension}`;
+
+  const { error } = await supabase.storage.from(PRODUCTOS_BUCKET).upload(filePath, req.file.buffer, {
+    contentType: req.file.mimetype,
+    upsert: false,
+  });
+
+  if (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+
+  const { data } = supabase.storage.from(PRODUCTOS_BUCKET).getPublicUrl(filePath);
+
+  res.status(201).json({
+    success: true,
+    data: {
+      path: filePath,
+      publicUrl: data.publicUrl,
+    },
+  });
+});
+
 router.post("/productos", async (req, res) => {
   const {
     nombre,
@@ -409,10 +467,11 @@ router.get("/marketplace/listados", async (req, res) => {
     const term = q.trim().toLowerCase();
     const numQ = Number(term);
 
-    result = result.filter(l =>
-      (l.nombre || "").toLowerCase().includes(term) ||
-      (l.vendedor_nickname || "").toLowerCase().includes(term) ||
-      (!Number.isNaN(numQ) && l.id_listado === numQ)
+    result = result.filter(
+      (l) =>
+        (l.nombre || "").toLowerCase().includes(term) ||
+        (l.vendedor_nickname || "").toLowerCase().includes(term) ||
+        (!Number.isNaN(numQ) && l.id_listado === numQ),
     );
   }
 
