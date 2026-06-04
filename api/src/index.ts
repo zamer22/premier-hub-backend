@@ -21,6 +21,7 @@ import missingXIRouter from "./rutas/api_missing_xi";
 import mlRouter from "./rutas/api_ml";
 import leaderboardRouter from "./rutas/api_leaderboard";
 import foroRouter from "./rutas/api_foro";
+import labRouter from "./rutas/api_lab";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
@@ -66,6 +67,7 @@ app.use("/api/admin", adminRouter);
 app.use("/api/missing-xi", missingXIRouter);
 app.use("/api/ml", mlRouter);
 app.use("/api/leaderboard", leaderboardRouter);
+app.use("/api/lab", labRouter);
 
 /* Estos van después porque son más generales */
 app.use("/api", partidosRouter);
