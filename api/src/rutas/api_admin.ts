@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import multer from "multer";
 import supabase from "../db";
+import { requireAdmin } from "../middleware/requireAuth";
 
 const router = Router();
 
@@ -40,6 +41,7 @@ const ADMIN_LISTADO_FIELDS = `
 `;
 
 const ESTADOS_VALIDOS = ["procesando", "enviado", "en_camino", "entregado", "cancelado"];
+const FORUM_BUCKET = "forum-media";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -149,6 +151,70 @@ async function normalizarListados(rows: any[]) {
   }
 
   return rows.map((l) => normalizarListado(l, vendedoresById));
+}
+
+function getAdminId(req: Request) {
+  const idRaw = (req.query.id_usuario ?? req.body?.id_usuario ?? req.header("x-id-usuario")) as string | number | undefined;
+  return Number(idRaw);
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return "Error interno del servidor";
+}
+
+function normalizeSlug(value: unknown) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
+
+async function signedForumImage(path: string | null) {
+  if (!path) return null;
+
+  const { data, error } = await supabase.storage
+    .from(FORUM_BUCKET)
+    .createSignedUrl(path, 60 * 60);
+
+  if (error) return null;
+  return data.signedUrl;
+}
+
+async function getModerationTarget(event: any) {
+  if (event.target_type === "post") {
+    const { data } = await supabase
+      .from("forum_posts")
+      .select(`
+        id, subforum_id, id_usuario, title, body, image_path, status, created_at, published_at,
+        subforum:forum_subforums(id, slug, name),
+        usuario:usuario!forum_posts_id_usuario_fkey(id_usuario, nickname, nombre_usuario, correo)
+      `)
+      .eq("id", event.target_id)
+      .maybeSingle();
+
+    return data ? { ...data, image_url: await signedForumImage(data.image_path) } : null;
+  }
+
+  if (event.target_type === "comment") {
+    const { data } = await supabase
+      .from("forum_comments")
+      .select(`
+        id, post_id, id_usuario, body, status, created_at, published_at,
+        post:forum_posts(id, title),
+        usuario:usuario!forum_comments_id_usuario_fkey(id_usuario, nickname, nombre_usuario, correo)
+      `)
+      .eq("id", event.target_id)
+      .maybeSingle();
+
+    return data || null;
+  }
+
+  return null;
 }
 
 /* ====================== PEDIDOS ADMIN ====================== */
@@ -479,12 +545,13 @@ router.get("/marketplace/listados", async (req, res) => {
 });
 
 router.post("/marketplace/publicar", async (req, res) => {
-  const { id_admin, id_producto, precio } = req.body;
+  const id_admin = req.userId!;
+  const { id_producto, precio } = req.body;
 
-  if (!id_admin || !id_producto || !precio || Number(precio) <= 0) {
+  if (!id_producto || !precio || Number(precio) <= 0) {
     return res.status(400).json({
       success: false,
-      error: "Faltan datos o precio inválido",
+      error: "Faltan datos o precio invalido",
     });
   }
 
@@ -636,6 +703,371 @@ router.put("/marketplace/listados/:id_listado", async (req, res) => {
       success: false,
       error: err.message || "Error cargando vendedor",
     });
+  }
+});
+
+/* ====================== FORO / MODERACION ADMIN ====================== */
+
+router.get("/forum/subforos", async (_req, res) => {
+  const { data, error } = await supabase
+    .from("forum_subforums")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error) return res.status(500).json({ success: false, error: error.message });
+  return res.json({ success: true, data: data || [] });
+});
+
+router.post("/forum/subforos", async (req, res) => {
+  const adminId = getAdminId(req);
+  const name = String(req.body?.name || "").trim();
+  const slug = normalizeSlug(req.body?.slug || name);
+  const description = String(req.body?.description || "").trim() || null;
+
+  if (!name || slug.length < 3) {
+    return res.status(400).json({ success: false, error: "Nombre o slug invalido" });
+  }
+
+  const { data, error } = await supabase
+    .from("forum_subforums")
+    .insert({
+      name,
+      slug,
+      description,
+      created_by: adminId,
+    })
+    .select("*")
+    .single();
+
+  if (error) return res.status(500).json({ success: false, error: error.message });
+  return res.status(201).json({ success: true, data });
+});
+
+router.patch("/forum/subforos/:id", async (req, res) => {
+  const updates: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+  };
+
+  if (req.body?.name !== undefined) updates.name = String(req.body.name).trim();
+  if (req.body?.description !== undefined) {
+    updates.description = String(req.body.description || "").trim() || null;
+  }
+  if (req.body?.slug !== undefined) {
+    const slug = normalizeSlug(req.body.slug);
+    if (slug.length < 3) return res.status(400).json({ success: false, error: "Slug invalido" });
+    updates.slug = slug;
+  }
+  if (req.body?.is_active !== undefined) updates.is_active = req.body.is_active === true;
+
+  const { data, error } = await supabase
+    .from("forum_subforums")
+    .update(updates)
+    .eq("id", Number(req.params.id))
+    .select("*")
+    .single();
+
+  if (error) return res.status(500).json({ success: false, error: error.message });
+  return res.json({ success: true, data });
+});
+
+router.delete("/forum/subforos/:id", async (req, res) => {
+  const { data, error } = await supabase
+    .from("forum_subforums")
+    .update({ is_active: false, updated_at: new Date().toISOString() })
+    .eq("id", Number(req.params.id))
+    .select("*")
+    .single();
+
+  if (error) return res.status(500).json({ success: false, error: error.message });
+  return res.json({ success: true, data });
+});
+
+router.get("/forum/moderation", async (_req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("moderation_events")
+      .select(`
+        *,
+        usuario:usuario(id_usuario, nickname, nombre_usuario, correo)
+      `)
+      .eq("scope", "forum")
+      .eq("status", "flagged")
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    if (error) throw error;
+
+    const items = (
+      await Promise.all(
+        (data || []).map(async (event) => ({
+          ...event,
+          target: await getModerationTarget(event),
+        }))
+      )
+    ).filter((item) => item.target?.status === "pending_review");
+
+    return res.json({ success: true, data: items });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: getErrorMessage(error) });
+  }
+});
+
+router.post("/forum/moderation/:eventId/resolve", async (req, res) => {
+  try {
+    const adminId = getAdminId(req);
+    const action = String(req.body?.action || "");
+    const notes = String(req.body?.notes || "").trim() || null;
+
+    if (!["approve", "reject"].includes(action)) {
+      return res.status(400).json({ success: false, error: "Accion invalida" });
+    }
+
+    const { data: event, error: eventError } = await supabase
+      .from("moderation_events")
+      .select("*")
+      .eq("id", Number(req.params.eventId))
+      .maybeSingle();
+
+    if (eventError) throw eventError;
+    if (!event) return res.status(404).json({ success: false, error: "Alerta no encontrada" });
+
+    const table = event.target_type === "post" ? "forum_posts" : "forum_comments";
+    const nextStatus = action === "approve" ? "published" : "rejected";
+    const updates: Record<string, unknown> = {
+      status: nextStatus,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (nextStatus === "published") updates.published_at = new Date().toISOString();
+
+    const { error: targetError } = await supabase
+      .from(table)
+      .update(updates)
+      .eq("id", Number(event.target_id));
+
+    if (targetError) throw targetError;
+
+    const { error: actionError } = await supabase.from("moderation_actions").insert({
+      event_id: event.id,
+      admin_id: adminId,
+      action,
+      notes,
+    });
+
+    if (actionError) throw actionError;
+
+    return res.json({ success: true });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: getErrorMessage(error) });
+  }
+});
+
+router.get("/forum/reports", async (_req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("forum_reports")
+      .select(`
+        *,
+        usuario:usuario!forum_reports_id_usuario_fkey(id_usuario, nickname, nombre_usuario, correo)
+      `)
+      .eq("status", "open")
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    if (error) throw error;
+
+    const items = await Promise.all(
+      (data || []).map(async (report) => ({
+        ...report,
+        target: await getModerationTarget(report),
+      }))
+    );
+
+    return res.json({ success: true, data: items });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: getErrorMessage(error) });
+  }
+});
+
+router.put("/forum/reports/:id", async (req, res) => {
+  try {
+    const adminId = getAdminId(req);
+    const action = String(req.body?.action || req.body?.status || "");
+
+    if (!["approve", "block", "dismissed", "resolved"].includes(action)) {
+      return res.status(400).json({ success: false, error: "Accion invalida" });
+    }
+
+    const { data: report, error: fetchError } = await supabase
+      .from("forum_reports")
+      .select("*")
+      .eq("id", Number(req.params.id))
+      .maybeSingle();
+
+    if (fetchError) throw fetchError;
+    if (!report) return res.status(404).json({ success: false, error: "Reporte no encontrado" });
+
+    const isBlock = action === "block" || action === "resolved";
+    const nextReportStatus = isBlock ? "resolved" : "dismissed";
+    const targetTable = report.target_type === "post" ? "forum_posts" : "forum_comments";
+
+    if (isBlock) {
+      const { error: targetError } = await supabase
+        .from(targetTable)
+        .update({ status: "rejected", updated_at: new Date().toISOString() })
+        .eq("id", Number(report.target_id));
+
+      if (targetError) throw targetError;
+    }
+
+    const { data, error } = await supabase
+      .from("forum_reports")
+      .update({
+        status: nextReportStatus,
+        reviewed_by: adminId,
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq("target_type", report.target_type)
+      .eq("target_id", Number(report.target_id))
+      .eq("status", "open")
+      .select("*");
+
+    if (error) throw error;
+
+    await supabase.from("moderation_actions").insert({
+      admin_id: adminId,
+      action: isBlock ? "reject" : "approve",
+      notes: `report:${report.target_type}:${report.target_id}`,
+    });
+
+    return res.json({ success: true, data: data || [] });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: getErrorMessage(error) });
+  }
+});
+
+router.get("/forum/users", async (_req, res) => {
+  try {
+    const [{ data: events, error: eventsError }, { data: restrictions, error: restrictionsError }] =
+      await Promise.all([
+        supabase
+          .from("moderation_events")
+          .select("id_usuario, status")
+          .eq("scope", "forum")
+          .eq("status", "flagged"),
+        supabase
+          .from("user_restrictions")
+          .select("*, usuario:usuario!user_restrictions_id_usuario_fkey(id_usuario, nickname, nombre_usuario, correo)")
+          .eq("scope", "forum")
+          .eq("active", true)
+          .order("created_at", { ascending: false }),
+      ]);
+
+    if (eventsError) throw eventsError;
+    if (restrictionsError) throw restrictionsError;
+
+    const alertCounts = (events || []).reduce<Record<number, number>>((acc, event: any) => {
+      const userId = Number(event.id_usuario);
+      acc[userId] = (acc[userId] || 0) + 1;
+      return acc;
+    }, {});
+    const userIds = Object.keys(alertCounts).map(Number);
+
+    let users: any[] = [];
+    if (userIds.length) {
+      const { data, error } = await supabase
+        .from("usuario")
+        .select("id_usuario, nickname, nombre_usuario, correo")
+        .in("id_usuario", userIds);
+      if (error) throw error;
+      users = data || [];
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        users: users.map((user) => ({
+          ...user,
+          alert_count: alertCounts[Number(user.id_usuario)] || 0,
+          restriction: (restrictions || []).find((restriction: any) => Number(restriction.id_usuario) === Number(user.id_usuario)) || null,
+        })),
+        restrictions: restrictions || [],
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: getErrorMessage(error) });
+  }
+});
+
+router.post("/forum/users/:userId/restrictions", async (req, res) => {
+  try {
+    const adminId = getAdminId(req);
+    const userId = Number(req.params.userId);
+    const reason = String(req.body?.reason || "").trim() || "Restriccion aplicada por moderacion";
+
+    await supabase
+      .from("user_restrictions")
+      .update({
+        active: false,
+        lifted_by: adminId,
+        lifted_at: new Date().toISOString(),
+      })
+      .eq("id_usuario", userId)
+      .eq("scope", "forum")
+      .eq("active", true);
+
+    const { data, error } = await supabase
+      .from("user_restrictions")
+      .insert({
+        id_usuario: userId,
+        scope: "forum",
+        restriction_type: "read_only",
+        reason,
+        active: true,
+        created_by: adminId,
+      })
+      .select("*")
+      .single();
+
+    if (error) throw error;
+
+    await supabase.from("moderation_actions").insert({
+      admin_id: adminId,
+      action: "ban_user",
+      notes: `forum:${userId}:${reason}`,
+    });
+
+    return res.status(201).json({ success: true, data });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: getErrorMessage(error) });
+  }
+});
+
+router.delete("/forum/restrictions/:id", async (req, res) => {
+  try {
+    const adminId = getAdminId(req);
+    const { data, error } = await supabase
+      .from("user_restrictions")
+      .update({
+        active: false,
+        lifted_by: adminId,
+        lifted_at: new Date().toISOString(),
+      })
+      .eq("id", Number(req.params.id))
+      .select("*")
+      .single();
+
+    if (error) throw error;
+
+    await supabase.from("moderation_actions").insert({
+      admin_id: adminId,
+      action: "unban_user",
+      notes: `forum:${data.id_usuario}`,
+    });
+
+    return res.json({ success: true, data });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: getErrorMessage(error) });
   }
 });
 

@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import supabase from "../db";
+import { getSessionUserId } from "../middleware/requireAuth";
 
 const router = Router();
 
@@ -55,12 +56,6 @@ function getTodayDate() {
   const day = parts.find((part) => part.type === "day")?.value;
 
   return `${year}-${month}-${day}`;
-}
-
-function getSessionUserId(req: Request) {
-  const rawId = (req as any).signedCookies?.ph_session;
-  const userId = Number(rawId);
-  return Number.isInteger(userId) && userId > 0 ? userId : null;
 }
 
 function getInitials(name: string) {

@@ -19,6 +19,9 @@ import historialRouter from "./rutas/partidosPasados";
 import adminRouter from "./rutas/api_admin";
 import missingXIRouter from "./rutas/api_missing_xi";
 import mlRouter from "./rutas/api_ml";
+import leaderboardRouter from "./rutas/api_leaderboard";
+import foroRouter from "./rutas/api_foro";
+import labRouter from "./rutas/api_lab";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
@@ -31,7 +34,22 @@ app.use(
 );
 
 app.use(cookieParser(process.env.COOKIE_SECRET));
-app.use(express.json({ limit: "8mb" }));
+
+/*
+Parser de JSON: por defecto limite estricto de 1mb para casi todo. El unico
+endpoint que necesita mas es /api/auth/profile/photo (sube una imagen en base64
+hasta 5mb -> ~6.7mb en JSON). Se monta un parser dedicado de 8mb solo para esa
+ruta y se evita correr el parser de 1mb antes para que no rechace la peticion.
+*/
+const jsonParser1mb = express.json({ limit: "1mb" });
+const jsonParser8mb = express.json({ limit: "8mb" });
+
+app.use((req, res, next) => {
+  if (req.path === "/api/auth/profile/photo") {
+    return jsonParser8mb(req, res, next);
+  }
+  return jsonParser1mb(req, res, next);
+});
 
 app.use("/api/auth", authRouter);
 app.use("/api/ranking", rankingRouter);
@@ -42,11 +60,14 @@ app.use("/api/marketplace", marketplaceRouter);
 app.use("/api/wordle", wordleRouter);
 app.use("/api/historia", historiaRouter);
 app.use("/api/partidos/historial", historialRouter);
+app.use("/api/foro", foroRouter);
 
 /* Pon admin antes de routers generales /api */
 app.use("/api/admin", adminRouter);
 app.use("/api/missing-xi", missingXIRouter);
 app.use("/api/ml", mlRouter);
+app.use("/api/leaderboard", leaderboardRouter);
+app.use("/api/lab", labRouter);
 
 /* Estos van después porque son más generales */
 app.use("/api", partidosRouter);
