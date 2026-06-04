@@ -11,6 +11,7 @@ type DbLeaderboardRow = {
   rank: number | string;
   id_usuario: number | string;
   username: string | null;
+  foto_perfil: string | null;
   total_points: number | string | null;
   games_played: number | string | null;
   total_score: number | string | null;
@@ -33,12 +34,14 @@ type UserRow = {
   id_usuario: number | string;
   nickname: string | null;
   nombre_usuario: string | null;
+  foto_perfil: string | null;
 };
 
 type LeaderboardItem = {
   rank: number;
   id_usuario: number;
   username: string;
+  foto_perfil: string | null;
   total_points: number;
   games_played: number;
   total_score: number;
@@ -118,6 +121,7 @@ function mapDbLeaderboardRow(row: DbLeaderboardRow): LeaderboardItem {
     rank: toNumber(row.rank),
     id_usuario: toNumber(row.id_usuario),
     username: row.username || "Usuario",
+    foto_perfil: row.foto_perfil,
     total_points: toNumber(row.total_points),
     games_played: toNumber(row.games_played),
     total_score: toNumber(row.total_score),
@@ -207,7 +211,7 @@ async function getFilteredLeaderboard(
   if (userIds.length) {
     const { data: users, error: usersError } = await supabase
       .from("usuario")
-      .select("id_usuario, nickname, nombre_usuario")
+      .select("id_usuario, nickname, nombre_usuario, foto_perfil")
       .in("id_usuario", userIds);
 
     if (usersError) throw usersError;
@@ -281,6 +285,7 @@ async function getFilteredLeaderboard(
       rank: index + 1,
       id_usuario: item.id_usuario,
       username: getUsername(usersById.get(item.id_usuario)),
+      foto_perfil: usersById.get(item.id_usuario)?.foto_perfil ?? null,
       total_points: item.total_points,
       games_played: item.games_played,
       total_score: item.total_score,
