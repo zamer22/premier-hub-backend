@@ -33,7 +33,22 @@ app.use(
 );
 
 app.use(cookieParser(process.env.COOKIE_SECRET));
-app.use(express.json({ limit: "8mb" }));
+
+/*
+Parser de JSON: por defecto limite estricto de 1mb para casi todo. El unico
+endpoint que necesita mas es /api/auth/profile/photo (sube una imagen en base64
+hasta 5mb -> ~6.7mb en JSON). Se monta un parser dedicado de 8mb solo para esa
+ruta y se evita correr el parser de 1mb antes para que no rechace la peticion.
+*/
+const jsonParser1mb = express.json({ limit: "1mb" });
+const jsonParser8mb = express.json({ limit: "8mb" });
+
+app.use((req, res, next) => {
+  if (req.path === "/api/auth/profile/photo") {
+    return jsonParser8mb(req, res, next);
+  }
+  return jsonParser1mb(req, res, next);
+});
 
 app.use("/api/auth", authRouter);
 app.use("/api/ranking", rankingRouter);

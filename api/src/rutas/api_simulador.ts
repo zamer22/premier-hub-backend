@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 
 import supabase from "../db";
+import { requireAuth } from "../middleware/requireAuth";
 
 const router = Router();
 
@@ -15,7 +16,6 @@ type RankingItem = unknown;
 type SimulationRecord = unknown;
 
 type CreateSimulationBody = {
-  id_usuario: number;
   partido_data: unknown;
   cambios: unknown;
 };
@@ -115,12 +115,14 @@ La ruta inserta un nuevo registro en la tabla 'simulacion' con el status 'pendie
 */
 router.post(
   "/simulacion",
+  requireAuth,
   async (
     req: Request<{}, {}, CreateSimulationBody>,
     res: Response<SimulationRouteResponse>,
   ) => {
     try {
-      const { id_usuario, partido_data, cambios } = req.body;
+      const id_usuario = req.userId!;
+      const { partido_data, cambios } = req.body;
 
       const { data, error } = await supabase
         .from("simulacion")

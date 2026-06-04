@@ -1,5 +1,6 @@
-import { Router, Request, Response, NextFunction } from "express";
+import { Router } from "express";
 import supabase from "../db";
+import { requireAdmin } from "../middleware/requireAuth";
 
 const router = Router();
 
@@ -41,30 +42,12 @@ const ADMIN_LISTADO_FIELDS = `
 const ESTADOS_VALIDOS = ["procesando", "enviado", "en_camino", "entregado", "cancelado"];
 const FORUM_BUCKET = "forum-media";
 
-async function verificarAdmin(req: Request, res: Response, next: NextFunction) {
-  const idRaw = (req.query.id_usuario ?? req.body?.id_usuario ?? req.header("x-id-usuario")) as string | number | undefined;
-  const id = idRaw != null ? Number(idRaw) : NaN;
-
-  if (!id || Number.isNaN(id)) {
-    return res.status(401).json({ success: false, error: "Falta id_usuario" });
-  }
-
-  const { data, error } = await supabase
-    .from("usuario")
-    .select("es_admin")
-    .eq("id_usuario", id)
-    .maybeSingle();
-
-  if (error) return res.status(500).json({ success: false, error: error.message });
-
-  if (!data || !data.es_admin) {
-    return res.status(403).json({ success: false, error: "Acceso solo para administradores" });
-  }
-
-  next();
-}
-
-router.use(verificarAdmin);
+/*
+Todas las rutas de /api/admin pasan por requireAdmin: exige cookie de sesion
+firmada valida y que el usuario tenga es_admin = true en la BD. El id del admin
+se obtiene de req.userId (jamas del cliente).
+*/
+router.use(requireAdmin);
 
 function normalizarProducto(p: any) {
   return {
@@ -485,12 +468,13 @@ router.get("/marketplace/listados", async (req, res) => {
 });
 
 router.post("/marketplace/publicar", async (req, res) => {
-  const { id_admin, id_producto, precio } = req.body;
+  const id_admin = req.userId!;
+  const { id_producto, precio } = req.body;
 
-  if (!id_admin || !id_producto || !precio || Number(precio) <= 0) {
+  if (!id_producto || !precio || Number(precio) <= 0) {
     return res.status(400).json({
       success: false,
-      error: "Faltan datos o precio inválido",
+      error: "Faltan datos o precio invalido",
     });
   }
 
