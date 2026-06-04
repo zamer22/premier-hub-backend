@@ -20,6 +20,7 @@ import adminRouter from "./rutas/api_admin";
 import missingXIRouter from "./rutas/api_missing_xi";
 import mlRouter from "./rutas/api_ml";
 import leaderboardRouter from "./rutas/api_leaderboard";
+import foroRouter from "./rutas/api_foro";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 4000;
@@ -43,6 +44,7 @@ app.use("/api/marketplace", marketplaceRouter);
 app.use("/api/wordle", wordleRouter);
 app.use("/api/historia", historiaRouter);
 app.use("/api/partidos/historial", historialRouter);
+app.use("/api/foro", foroRouter);
 
 /* Pon admin antes de routers generales /api */
 app.use("/api/admin", adminRouter);
