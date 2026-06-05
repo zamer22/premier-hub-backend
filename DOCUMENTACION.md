@@ -1,6 +1,6 @@
 # API — Premier Hub
 
-## Índice
+## Índice.
 
 1. [Conexión a Supabase](#1-conexión-a-supabase)
 2. [Base de Datos](#2-base-de-datos)

@@ -11,12 +11,15 @@ type OpenAIModerationResponse = {
   id?: string;
   model?: string;
   results?: OpenAIModerationResult[];
+  error?: { message?: string };
+  skipped?: boolean;
+  reason?: string;
 };
 
 export type ModerationCheckResult = {
   flagged: boolean;
   status?: "clean" | "flagged" | "error";
-  provider: "openai";
+  provider: "openai" | "fallback";
   model: string;
   categories: ModerationCategoryMap;
   categoryScores: ModerationScoreMap;
@@ -24,6 +27,7 @@ export type ModerationCheckResult = {
 };
 
 const MODERATION_MODEL = process.env.OPENAI_MODERATION_MODEL || "omni-moderation-latest";
+const FALLBACK_MODEL = "moderation-unavailable";
 
 export class ModerationRateLimitError extends Error {
   constructor(message = "OpenAI Moderation esta saturado. Intenta publicar de nuevo en unos minutos.") {
@@ -33,12 +37,25 @@ export class ModerationRateLimitError extends Error {
 }
 
 function getOpenAIKey() {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) {
-    throw new Error("OPENAI_API_KEY no esta configurada para moderar el foro");
-  }
+  return process.env.OPENAI_API_KEY?.trim() || null;
+}
 
-  return key;
+function fallbackModeration(reason: string, categories: ModerationCategoryMap = {}): ModerationCheckResult {
+  return {
+    flagged: false,
+    status: "error",
+    provider: "fallback",
+    model: FALLBACK_MODEL,
+    categories: {
+      moderation_unavailable: true,
+      ...categories,
+    },
+    categoryScores: {},
+    rawResponse: {
+      skipped: true,
+      reason,
+    },
+  };
 }
 
 export async function moderateForumContent(input: {
@@ -46,6 +63,12 @@ export async function moderateForumContent(input: {
   imageDataUrl?: string | null;
 }): Promise<ModerationCheckResult> {
   const key = getOpenAIKey();
+  if (!key) {
+    return fallbackModeration("OPENAI_API_KEY no esta configurada", {
+      missing_openai_api_key: true,
+    });
+  }
+
   const text = input.text.trim();
 
   const moderationInput = input.imageDataUrl
@@ -55,41 +78,44 @@ export async function moderateForumContent(input: {
       ]
     : text;
 
-  const response = await fetch("https://api.openai.com/v1/moderations", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: MODERATION_MODEL,
-      input: moderationInput,
-    }),
-  });
+  let response: Response;
+  try {
+    response = await fetch("https://api.openai.com/v1/moderations", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: MODERATION_MODEL,
+        input: moderationInput,
+      }),
+    });
+  } catch (error) {
+    return fallbackModeration(error instanceof Error ? error.message : "No se pudo conectar con OpenAI", {
+      openai_request_failed: true,
+    });
+  }
 
-  const json = (await response.json().catch(() => ({}))) as OpenAIModerationResponse & {
-    error?: { message?: string };
-  };
+  const json = (await response.json().catch(() => ({}))) as OpenAIModerationResponse;
 
   if (!response.ok && response.status === 429) {
-    return {
-      flagged: false,
-      status: "error",
-      provider: "openai",
-      model: MODERATION_MODEL,
-      categories: { moderation_rate_limited: true },
-      categoryScores: {},
-      rawResponse: json,
-    };
+    return fallbackModeration(json.error?.message || "OpenAI Moderation esta saturado", {
+      moderation_rate_limited: true,
+    });
   }
 
   if (!response.ok) {
-    throw new Error(json.error?.message || "No se pudo moderar el contenido");
+    return fallbackModeration(json.error?.message || "No se pudo moderar el contenido", {
+      openai_response_error: true,
+    });
   }
 
   const result = json.results?.[0];
   if (!result) {
-    throw new Error("La moderacion no devolvio resultados");
+    return fallbackModeration("La moderacion no devolvio resultados", {
+      openai_empty_results: true,
+    });
   }
 
   return {
