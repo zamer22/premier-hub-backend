@@ -545,20 +545,37 @@ router.get("/marketplace/listados", async (req, res) => {
 });
 
 router.post("/marketplace/publicar", async (req, res) => {
-  const id_admin = req.userId!;
-  const { id_producto, precio } = req.body;
+  const { id_admin, id_producto, precio } = req.body;
 
-  if (!id_producto || !precio || Number(precio) <= 0) {
+  const adminId = Number(id_admin ?? req.query.id_usuario ?? req.header("x-id-usuario"));
+  const productoId = Number(id_producto);
+  const precioNum = Number(precio);
+
+  if (!Number.isInteger(adminId) || adminId <= 0) {
     return res.status(400).json({
       success: false,
-      error: "Faltan datos o precio invalido",
+      error: "id_admin invalido",
+    });
+  }
+
+  if (!Number.isInteger(productoId) || productoId <= 0) {
+    return res.status(400).json({
+      success: false,
+      error: "id_producto invalido",
+    });
+  }
+
+  if (!Number.isFinite(precioNum) || precioNum <= 0) {
+    return res.status(400).json({
+      success: false,
+      error: "Precio invalido",
     });
   }
 
   const { data: prod, error: prodErr } = await supabase
     .from("producto")
-    .select("id_producto, nombre")
-    .eq("id_producto", Number(id_producto))
+    .select("id_producto, nombre, categoria")
+    .eq("id_producto", productoId)
     .maybeSingle();
 
   if (prodErr) return res.status(500).json({ success: false, error: prodErr.message });
@@ -567,8 +584,8 @@ router.post("/marketplace/publicar", async (req, res) => {
   let { data: inventario, error: invErr } = await supabase
     .from("inventario_producto")
     .select("id")
-    .eq("id_usuario", Number(id_admin))
-    .eq("id_producto", Number(id_producto))
+    .eq("id_usuario", adminId)
+    .eq("id_producto", productoId)
     .limit(1)
     .maybeSingle();
 
@@ -578,8 +595,10 @@ router.post("/marketplace/publicar", async (req, res) => {
     const { data: newInv, error: insertInvErr } = await supabase
       .from("inventario_producto")
       .insert({
-        id_usuario: Number(id_admin),
-        id_producto: Number(id_producto),
+        id_usuario: adminId,
+        id_producto: productoId,
+        cantidad: 1,
+        es_perfil: prod.categoria === "perfil",
       })
       .select("id")
       .single();
@@ -611,9 +630,9 @@ router.post("/marketplace/publicar", async (req, res) => {
   const { data, error } = await supabase
     .from("marketplace_listado")
     .insert({
-      id_vendedor: Number(id_admin),
+      id_vendedor: adminId,
       id_inventario: inventario.id,
-      precio: Number(precio),
+      precio: precioNum,
     })
     .select(ADMIN_LISTADO_FIELDS)
     .single();
