@@ -4,22 +4,8 @@ import supabase from "../db";
 
 const router = Router();
 
-type LeaderboardGame = "all" | "wordle" | "missing_xi";
+type LeaderboardGame = "all" | "wordle" | "missing_xi" | "lab";
 type LeaderboardPeriod = "all" | "week" | "month";
-
-type DbLeaderboardRow = {
-  rank: number | string;
-  id_usuario: number | string;
-  username: string | null;
-  foto_perfil: string | null;
-  total_points: number | string | null;
-  games_played: number | string | null;
-  total_score: number | string | null;
-  max_score: number | string | null;
-  accuracy: number | string | null;
-  last_played_at: string | null;
-  favorite_game: string | null;
-};
 
 type GameResultRow = {
   game_key: string;
@@ -89,6 +75,7 @@ function normalizeGame(value: unknown): LeaderboardGame | null {
     return "wordle";
   }
   if (rawValue === "missing_xi" || rawValue === "missing-xi") return "missing_xi";
+  if (rawValue === "lab" || rawValue === "laboratorio") return "lab";
   return null;
 }
 
@@ -116,48 +103,6 @@ function getPeriodStartIso(period: LeaderboardPeriod) {
   return start.toISOString();
 }
 
-function mapDbLeaderboardRow(row: DbLeaderboardRow): LeaderboardItem {
-  return {
-    rank: toNumber(row.rank),
-    id_usuario: toNumber(row.id_usuario),
-    username: row.username || "Usuario",
-    foto_perfil: row.foto_perfil,
-    total_points: toNumber(row.total_points),
-    games_played: toNumber(row.games_played),
-    total_score: toNumber(row.total_score),
-    max_score: toNumber(row.max_score),
-    accuracy: toNumber(row.accuracy),
-    last_played_at: row.last_played_at,
-    favorite_game: row.favorite_game,
-  };
-}
-
-async function getGeneralLeaderboard(limit: number, userId: number | null) {
-  const { data, error } = await supabase
-    .from("arcade_leaderboard")
-    .select("*")
-    .order("rank", { ascending: true })
-    .limit(limit);
-
-  if (error) throw error;
-
-  const items = ((data || []) as DbLeaderboardRow[]).map(mapDbLeaderboardRow);
-  let me = userId ? items.find((item) => item.id_usuario === userId) || null : null;
-
-  if (userId && !me) {
-    const { data: userRank, error: userRankError } = await supabase
-      .from("arcade_leaderboard")
-      .select("*")
-      .eq("id_usuario", userId)
-      .maybeSingle();
-
-    if (userRankError) throw userRankError;
-    me = userRank ? mapDbLeaderboardRow(userRank as DbLeaderboardRow) : null;
-  }
-
-  return { items, me };
-}
-
 function getUsername(user: UserRow | undefined) {
   return user?.nickname || user?.nombre_usuario || "Usuario";
 }
@@ -169,40 +114,80 @@ function calculateFavoriteGame(
   let favoriteGames = -1;
   let favoritePoints = -1;
 
+  // El juego "favorito" es el que mas PUNTOS le dio al usuario (no el mas jugado).
   for (const [gameKey, stats] of gameStats) {
     if (
-      stats.games > favoriteGames ||
-      (stats.games === favoriteGames && stats.points > favoritePoints)
+      stats.points > favoritePoints ||
+      (stats.points === favoritePoints && stats.games > favoriteGames)
     ) {
       favoriteGame = gameKey;
-      favoriteGames = stats.games;
       favoritePoints = stats.points;
+      favoriteGames = stats.games;
     }
   }
 
   return favoriteGame;
 }
 
+// Laboratorio: cada desafio completado es una "jugada" (puntos = puntos_otorgados, fecha = fecha_completado).
+// Los datos ya viven en lab_usuario_desafio; no hay que tocar la vista de Supabase.
+async function getLabResults(periodStart: string | null): Promise<GameResultRow[]> {
+  let query = supabase
+    .from("lab_usuario_desafio")
+    .select("id_usuario, puntos_otorgados, fecha_completado")
+    .eq("completado", true)
+    .gt("puntos_otorgados", 0)
+    .order("fecha_completado", { ascending: false })
+    .limit(5000);
+
+  if (periodStart) query = query.gte("fecha_completado", periodStart);
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  return ((data || []) as Array<{
+    id_usuario: number | string;
+    puntos_otorgados: number | string | null;
+    fecha_completado: string | null;
+  }>).map((row) => ({
+    game_key: "lab",
+    id_usuario: row.id_usuario,
+    score: null,
+    max_score: null,
+    points: row.puntos_otorgados,
+    played_at: row.fecha_completado,
+  }));
+}
+
 async function getFilteredLeaderboard(
-  game: Exclude<LeaderboardGame, "all"> | "all",
+  game: LeaderboardGame,
   period: LeaderboardPeriod,
   limit: number,
   userId: number | null,
 ) {
   const periodStart = getPeriodStartIso(period);
-  let query = supabase
-    .from("arcade_game_results_view")
-    .select("game_key, id_usuario, score, max_score, points, played_at")
-    .order("played_at", { ascending: false })
-    .limit(5000);
+  const rows: GameResultRow[] = [];
 
-  if (game !== "all") query = query.eq("game_key", game);
-  if (periodStart) query = query.gte("played_at", periodStart);
+  // Arcade (wordle / missing_xi). Se omite cuando el filtro es solo Laboratorio.
+  if (game !== "lab") {
+    let query = supabase
+      .from("arcade_game_results_view")
+      .select("game_key, id_usuario, score, max_score, points, played_at")
+      .order("played_at", { ascending: false })
+      .limit(5000);
 
-  const { data, error } = await query;
-  if (error) throw error;
+    if (game !== "all") query = query.eq("game_key", game);
+    if (periodStart) query = query.gte("played_at", periodStart);
 
-  const rows = (data || []) as GameResultRow[];
+    const { data, error } = await query;
+    if (error) throw error;
+    rows.push(...((data || []) as GameResultRow[]));
+  }
+
+  // Laboratorio: entra en "General" (all) y como filtro propio.
+  if (game === "all" || game === "lab") {
+    rows.push(...(await getLabResults(periodStart)));
+  }
   const userIds = Array.from(new Set(rows.map((row) => toNumber(row.id_usuario)))).filter(
     (id) => id > 0,
   );
@@ -327,10 +312,7 @@ router.get(
       }
 
       const userId = getSessionUserId(req);
-      const useAggregateView = game === "all" && period === "all";
-      const leaderboard = useAggregateView
-        ? await getGeneralLeaderboard(limit, userId)
-        : await getFilteredLeaderboard(game, period, limit, userId);
+      const leaderboard = await getFilteredLeaderboard(game, period, limit, userId);
 
       return res.json({
         success: true,
@@ -341,7 +323,7 @@ router.get(
           period,
           limit,
           count: leaderboard.items.length,
-          source: useAggregateView ? "arcade_leaderboard" : "arcade_game_results_view",
+          source: "arcade_game_results_view",
         },
       });
     } catch (error: unknown) {
