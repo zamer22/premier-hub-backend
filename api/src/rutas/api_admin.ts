@@ -389,13 +389,17 @@ router.post("/productos/imagen", upload.single("imagen"), async (req, res) => {
     });
   }
 
-  const { data } = supabase.storage.from(PRODUCTOS_BUCKET).getPublicUrl(filePath);
+  // No usar getPublicUrl(): arma la URL con el SUPABASE_URL interno del backend
+  // (http://192.168.1.24:8000) que el navegador no alcanza. Construimos la URL
+  // publica con el dominio del tunnel, igual que las fotos de perfil en api_auth.
+  const supabasePublicBase = (process.env.SUPABASE_PUBLIC_URL || process.env.SUPABASE_URL!).replace(/\/$/, "");
+  const publicUrl = `${supabasePublicBase}/storage/v1/object/public/${PRODUCTOS_BUCKET}/${filePath}`;
 
   res.status(201).json({
     success: true,
     data: {
       path: filePath,
-      publicUrl: data.publicUrl,
+      publicUrl,
     },
   });
 });
