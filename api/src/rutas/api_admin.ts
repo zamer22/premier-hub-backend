@@ -1,4 +1,4 @@
-import { Router, Request, Response, NextFunction } from "express";
+import { Router } from "express";
 import multer from "multer";
 import supabase from "../db";
 import { requireAdmin } from "../middleware/requireAuth";
@@ -52,34 +52,7 @@ const upload = multer({
 
 const PRODUCTOS_BUCKET = "productosMarketplace";
 
-async function verificarAdmin(req: Request, res: Response, next: NextFunction) {
-  const idRaw = (req.query.id_usuario ?? req.body?.id_usuario ?? req.header("x-id-usuario")) as
-    | string
-    | number
-    | undefined;
-
-  const id = idRaw != null ? Number(idRaw) : NaN;
-
-  if (!id || Number.isNaN(id)) {
-    return res.status(401).json({ success: false, error: "Falta id_usuario" });
-  }
-
-  const { data, error } = await supabase
-    .from("usuario")
-    .select("es_admin")
-    .eq("id_usuario", id)
-    .maybeSingle();
-
-  if (error) return res.status(500).json({ success: false, error: error.message });
-
-  if (!data || !data.es_admin) {
-    return res.status(403).json({ success: false, error: "Acceso solo para administradores" });
-  }
-
-  next();
-}
-
-router.use(verificarAdmin);
+router.use(requireAdmin);
 
 function normalizarProducto(p: any) {
   return {
@@ -151,11 +124,6 @@ async function normalizarListados(rows: any[]) {
   }
 
   return rows.map((l) => normalizarListado(l, vendedoresById));
-}
-
-function getAdminId(req: Request) {
-  const idRaw = (req.query.id_usuario ?? req.body?.id_usuario ?? req.header("x-id-usuario")) as string | number | undefined;
-  return Number(idRaw);
 }
 
 function getErrorMessage(error: unknown) {
@@ -653,12 +621,7 @@ router.post("/marketplace/publicar", async (req, res) => {
 router.delete("/marketplace/cancelar/:id_listado", async (req, res) => {
   const id_listado = Number(req.params.id_listado);
 
-  const adminIdRaw = (req.query.id_usuario ?? req.header("x-id-usuario")) as
-    | string
-    | number
-    | undefined;
-
-  const adminId = adminIdRaw != null ? Number(adminIdRaw) : NaN;
+  const adminId = req.userId!;
 
   if (!id_listado || Number.isNaN(id_listado)) {
     return res.status(400).json({
@@ -966,7 +929,7 @@ router.get("/forum/subforos", async (_req, res) => {
 });
 
 router.post("/forum/subforos", async (req, res) => {
-  const adminId = getAdminId(req);
+  const adminId = req.userId!;
   const name = String(req.body?.name || "").trim();
   const slug = normalizeSlug(req.body?.slug || name);
   const description = String(req.body?.description || "").trim() || null;
@@ -1061,7 +1024,7 @@ router.get("/forum/moderation", async (_req, res) => {
 
 router.post("/forum/moderation/:eventId/resolve", async (req, res) => {
   try {
-    const adminId = getAdminId(req);
+    const adminId = req.userId!;
     const action = String(req.body?.action || "");
     const notes = String(req.body?.notes || "").trim() || null;
 
@@ -1138,7 +1101,7 @@ router.get("/forum/reports", async (_req, res) => {
 
 router.put("/forum/reports/:id", async (req, res) => {
   try {
-    const adminId = getAdminId(req);
+    const adminId = req.userId!;
     const action = String(req.body?.action || req.body?.status || "");
 
     if (!["approve", "block", "dismissed", "resolved"].includes(action)) {
@@ -1248,7 +1211,7 @@ router.get("/forum/users", async (_req, res) => {
 
 router.post("/forum/users/:userId/restrictions", async (req, res) => {
   try {
-    const adminId = getAdminId(req);
+    const adminId = req.userId!;
     const userId = Number(req.params.userId);
     const reason = String(req.body?.reason || "").trim() || "Restriccion aplicada por moderacion";
 
@@ -1292,7 +1255,7 @@ router.post("/forum/users/:userId/restrictions", async (req, res) => {
 
 router.delete("/forum/restrictions/:id", async (req, res) => {
   try {
-    const adminId = getAdminId(req);
+    const adminId = req.userId!;
     const { data, error } = await supabase
       .from("user_restrictions")
       .update({
