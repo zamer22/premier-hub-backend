@@ -8,6 +8,7 @@ import {
   moderateForumContent,
   type ModerationCheckResult,
 } from "../services/moderationService";
+import { normalizeSupabaseSignedUrl } from "../services/storageUrl";
 
 const router = Router();
 
@@ -152,7 +153,7 @@ async function createSignedImageUrl(path: string | null) {
     .createSignedUrl(path, 60 * 60);
 
   if (error) return null;
-  return data.signedUrl;
+  return normalizeSupabaseSignedUrl(data.signedUrl);
 }
 
 async function mapPost(row: any, userId: number | null) {

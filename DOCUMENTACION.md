@@ -21,6 +21,7 @@
 | Parámetro | Valor |
 |---|---|
 | `SUPABASE_URL` | `https://supabase.zamer-o.com` (prod) |
+| `SUPABASE_PUBLIC_URL` | `https://supabase.zamer-o.com` (origen publico para Storage) |
 | `SUPABASE_SERVICE_KEY` | JWT HS256 — service role key |
 | `db.schema` | `premier` |
 | `autoRefreshToken` / `persistSession` | `false` (no necesario en backend) |
@@ -116,6 +117,7 @@ DEV_CORS_ORIGIN=http://localhost:5173
 COOKIE_SECRET=clave_larga_aleatoria
 
 SUPABASE_URL=https://supabase.zamer-o.com
+SUPABASE_PUBLIC_URL=https://supabase.zamer-o.com
 SUPABASE_SERVICE_KEY=eyJhbGci...
 
 APIFOOTBALL_KEY=tu_api_key
