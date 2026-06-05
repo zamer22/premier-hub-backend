@@ -1,4 +1,5 @@
 import { Router } from "express";
+import multer from "multer";
 import supabase from "../db";
 import { requireAdmin } from "../middleware/requireAuth";
 
@@ -40,12 +41,17 @@ const ADMIN_LISTADO_FIELDS = `
 `;
 
 const ESTADOS_VALIDOS = ["procesando", "enviado", "en_camino", "entregado", "cancelado"];
+const FORUM_BUCKET = "forum-media";
 
-/*
-Todas las rutas de /api/admin pasan por requireAdmin: exige cookie de sesion
-firmada valida y que el usuario tenga es_admin = true en la BD. El id del admin
-se obtiene de req.userId (jamas del cliente).
-*/
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 6 * 1024 * 1024,
+  },
+});
+
+const PRODUCTOS_BUCKET = "productosMarketplace";
+
 router.use(requireAdmin);
 
 function normalizarProducto(p: any) {
@@ -98,8 +104,8 @@ async function normalizarListados(rows: any[]) {
     new Set(
       rows
         .map((l: any) => Number(l.id_vendedor))
-        .filter((id: number) => Number.isFinite(id) && id > 0)
-    )
+        .filter((id: number) => Number.isFinite(id) && id > 0),
+    ),
   );
 
   const vendedoresById: Record<number, string | null> = {};
@@ -117,7 +123,66 @@ async function normalizarListados(rows: any[]) {
     });
   }
 
-  return rows.map(l => normalizarListado(l, vendedoresById));
+  return rows.map((l) => normalizarListado(l, vendedoresById));
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return "Error interno del servidor";
+}
+
+function normalizeSlug(value: unknown) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
+
+async function signedForumImage(path: string | null) {
+  if (!path) return null;
+
+  const { data, error } = await supabase.storage
+    .from(FORUM_BUCKET)
+    .createSignedUrl(path, 60 * 60);
+
+  if (error) return null;
+  return data.signedUrl;
+}
+
+async function getModerationTarget(event: any) {
+  if (event.target_type === "post") {
+    const { data } = await supabase
+      .from("forum_posts")
+      .select(`
+        id, subforum_id, id_usuario, title, body, image_path, status, created_at, published_at,
+        subforum:forum_subforums(id, slug, name),
+        usuario:usuario!forum_posts_id_usuario_fkey(id_usuario, nickname, nombre_usuario, correo)
+      `)
+      .eq("id", event.target_id)
+      .maybeSingle();
+
+    return data ? { ...data, image_url: await signedForumImage(data.image_path) } : null;
+  }
+
+  if (event.target_type === "comment") {
+    const { data } = await supabase
+      .from("forum_comments")
+      .select(`
+        id, post_id, id_usuario, body, status, created_at, published_at,
+        post:forum_posts(id, title),
+        usuario:usuario!forum_comments_id_usuario_fkey(id_usuario, nickname, nombre_usuario, correo)
+      `)
+      .eq("id", event.target_id)
+      .maybeSingle();
+
+    return data || null;
+  }
+
+  return null;
 }
 
 /* ====================== PEDIDOS ADMIN ====================== */
@@ -175,14 +240,7 @@ router.get("/pedido/:id_pedido", async (req, res) => {
 
 router.put("/pedido/:id_pedido", async (req, res) => {
   const id_pedido = Number(req.params.id_pedido);
-  const {
-    estado,
-    lat_actual,
-    lng_actual,
-    tracking_numero,
-    fecha_estimada,
-    notas_admin,
-  } = req.body;
+  const { estado, lat_actual, lng_actual, tracking_numero, fecha_estimada, notas_admin } = req.body;
 
   const { data: pedidoActual, error: fetchErr } = await supabase
     .from("pedido")
@@ -291,6 +349,57 @@ router.get("/productos", async (_req, res) => {
   });
 });
 
+router.post("/productos/imagen", upload.single("imagen"), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({
+      success: false,
+      error: "Falta imagen",
+    });
+  }
+
+  const allowedTypes: Record<string, string> = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+  };
+
+  const extension = allowedTypes[req.file.mimetype];
+
+  if (!extension) {
+    return res.status(400).json({
+      success: false,
+      error: "Formato de imagen no permitido. Usa JPG, PNG, WEBP o GIF.",
+    });
+  }
+
+  const filePath = `productos/${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}.${extension}`;
+
+  const { error } = await supabase.storage.from(PRODUCTOS_BUCKET).upload(filePath, req.file.buffer, {
+    contentType: req.file.mimetype,
+    upsert: false,
+  });
+
+  if (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+
+  const { data } = supabase.storage.from(PRODUCTOS_BUCKET).getPublicUrl(filePath);
+
+  res.status(201).json({
+    success: true,
+    data: {
+      path: filePath,
+      publicUrl: data.publicUrl,
+    },
+  });
+});
+
 router.post("/productos", async (req, res) => {
   const {
     nombre,
@@ -392,10 +501,11 @@ router.get("/marketplace/listados", async (req, res) => {
     const term = q.trim().toLowerCase();
     const numQ = Number(term);
 
-    result = result.filter(l =>
-      (l.nombre || "").toLowerCase().includes(term) ||
-      (l.vendedor_nickname || "").toLowerCase().includes(term) ||
-      (!Number.isNaN(numQ) && l.id_listado === numQ)
+    result = result.filter(
+      (l) =>
+        (l.nombre || "").toLowerCase().includes(term) ||
+        (l.vendedor_nickname || "").toLowerCase().includes(term) ||
+        (!Number.isNaN(numQ) && l.id_listado === numQ),
     );
   }
 
@@ -403,20 +513,37 @@ router.get("/marketplace/listados", async (req, res) => {
 });
 
 router.post("/marketplace/publicar", async (req, res) => {
-  const id_admin = req.userId!;
-  const { id_producto, precio } = req.body;
+  const { id_admin, id_producto, precio } = req.body;
 
-  if (!id_producto || !precio || Number(precio) <= 0) {
+  const adminId = Number(id_admin ?? req.query.id_usuario ?? req.header("x-id-usuario"));
+  const productoId = Number(id_producto);
+  const precioNum = Number(precio);
+
+  if (!Number.isInteger(adminId) || adminId <= 0) {
     return res.status(400).json({
       success: false,
-      error: "Faltan datos o precio invalido",
+      error: "id_admin invalido",
+    });
+  }
+
+  if (!Number.isInteger(productoId) || productoId <= 0) {
+    return res.status(400).json({
+      success: false,
+      error: "id_producto invalido",
+    });
+  }
+
+  if (!Number.isFinite(precioNum) || precioNum <= 0) {
+    return res.status(400).json({
+      success: false,
+      error: "Precio invalido",
     });
   }
 
   const { data: prod, error: prodErr } = await supabase
     .from("producto")
-    .select("id_producto, nombre")
-    .eq("id_producto", Number(id_producto))
+    .select("id_producto, nombre, categoria")
+    .eq("id_producto", productoId)
     .maybeSingle();
 
   if (prodErr) return res.status(500).json({ success: false, error: prodErr.message });
@@ -425,8 +552,8 @@ router.post("/marketplace/publicar", async (req, res) => {
   let { data: inventario, error: invErr } = await supabase
     .from("inventario_producto")
     .select("id")
-    .eq("id_usuario", Number(id_admin))
-    .eq("id_producto", Number(id_producto))
+    .eq("id_usuario", adminId)
+    .eq("id_producto", productoId)
     .limit(1)
     .maybeSingle();
 
@@ -436,8 +563,10 @@ router.post("/marketplace/publicar", async (req, res) => {
     const { data: newInv, error: insertInvErr } = await supabase
       .from("inventario_producto")
       .insert({
-        id_usuario: Number(id_admin),
-        id_producto: Number(id_producto),
+        id_usuario: adminId,
+        id_producto: productoId,
+        cantidad: 1,
+        es_perfil: prod.categoria === "perfil",
       })
       .select("id")
       .single();
@@ -469,9 +598,9 @@ router.post("/marketplace/publicar", async (req, res) => {
   const { data, error } = await supabase
     .from("marketplace_listado")
     .insert({
-      id_vendedor: Number(id_admin),
+      id_vendedor: adminId,
       id_inventario: inventario.id,
-      precio: Number(precio),
+      precio: precioNum,
     })
     .select(ADMIN_LISTADO_FIELDS)
     .single();
@@ -492,14 +621,39 @@ router.post("/marketplace/publicar", async (req, res) => {
 router.delete("/marketplace/cancelar/:id_listado", async (req, res) => {
   const id_listado = Number(req.params.id_listado);
 
+  const adminId = req.userId!;
+
+  if (!id_listado || Number.isNaN(id_listado)) {
+    return res.status(400).json({
+      success: false,
+      error: "ID de listado inválido",
+    });
+  }
+
   const { data: listado, error: fetchErr } = await supabase
     .from("marketplace_listado")
-    .select("id_listado, estado")
+    .select(`
+      id_listado,
+      id_vendedor,
+      id_inventario,
+      estado,
+      inventario:inventario_producto(
+        id,
+        id_usuario,
+        id_producto,
+        es_perfil
+      )
+    `)
     .eq("id_listado", id_listado)
     .maybeSingle();
 
-  if (fetchErr) return res.status(500).json({ success: false, error: fetchErr.message });
-  if (!listado) return res.status(404).json({ success: false, error: "Listado no encontrado" });
+  if (fetchErr) {
+    return res.status(500).json({ success: false, error: fetchErr.message });
+  }
+
+  if (!listado) {
+    return res.status(404).json({ success: false, error: "Listado no encontrado" });
+  }
 
   if (listado.estado !== "activo") {
     return res.status(409).json({
@@ -508,50 +662,248 @@ router.delete("/marketplace/cancelar/:id_listado", async (req, res) => {
     });
   }
 
-  const { error } = await supabase
+  const inventarioRaw = Array.isArray(listado.inventario)
+    ? listado.inventario[0]
+    : listado.inventario;
+
+  const inventario = inventarioRaw || null;
+
+  if (!inventario) {
+    return res.status(404).json({
+      success: false,
+      error: "Inventario del listado no encontrado",
+    });
+  }
+
+  const inventarioId = Number(listado.id_inventario);
+  const productoId = Number(inventario.id_producto);
+
+  const esListadoDelAdmin = Number(listado.id_vendedor) === adminId;
+
+  if (!esListadoDelAdmin) {
+    const { error } = await supabase
+      .from("marketplace_listado")
+      .update({ estado: "cancelado" })
+      .eq("id_listado", id_listado);
+
+    if (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    return res.json({
+      success: true,
+      removed: false,
+      data: {
+        id_listado,
+        estado: "cancelado",
+      },
+    });
+  }
+
+  await supabase
+    .from("usuario_equipamiento")
+    .update({ marco_inventario_id: null })
+    .eq("marco_inventario_id", inventarioId);
+
+  await supabase
+    .from("usuario_equipamiento")
+    .update({ titulo_inventario_id: null })
+    .eq("titulo_inventario_id", inventarioId);
+
+  await supabase
+    .from("usuario_equipamiento")
+    .update({ trofeo_inventario_id: null })
+    .eq("trofeo_inventario_id", inventarioId);
+
+  await supabase
+    .from("usuario_equipamiento")
+    .update({ banner_inventario_id: null })
+    .eq("banner_inventario_id", inventarioId);
+
+  const { error: deleteListadoErr } = await supabase
     .from("marketplace_listado")
-    .update({ estado: "cancelado" })
+    .delete()
     .eq("id_listado", id_listado);
 
-  if (error) return res.status(500).json({ success: false, error: error.message });
+  if (deleteListadoErr) {
+    return res.status(500).json({
+      success: false,
+      error: deleteListadoErr.message,
+    });
+  }
 
-  res.json({ success: true });
+  const { error: deleteInventarioErr } = await supabase
+    .from("inventario_producto")
+    .delete()
+    .eq("id", inventarioId)
+    .eq("id_usuario", adminId)
+    .eq("id_producto", productoId);
+
+  if (deleteInventarioErr) {
+    return res.status(500).json({
+      success: false,
+      error: deleteInventarioErr.message,
+    });
+  }
+
+  res.json({
+    success: true,
+    removed: true,
+    data: {
+      id_listado,
+      id_inventario: inventarioId,
+      id_producto: productoId,
+    },
+  });
 });
 
 router.put("/marketplace/listados/:id_listado", async (req, res) => {
   const id_listado = Number(req.params.id_listado);
-  const { precio } = req.body;
 
-  if (!precio || Number(precio) <= 0) {
-    return res.status(400).json({
-      success: false,
-      error: "Precio inválido",
-    });
-  }
+  const {
+    precio,
+    nombre,
+    descripcion,
+    costo,
+    stock,
+    imagen,
+    es_nuevo,
+    categoria,
+    tipo,
+    equipo,
+    rareza,
+    id_temporada,
+    css,
+    es_de_liga,
+  } = req.body;
 
-  const { data: listado } = await supabase
+  const { data: listado, error: listadoErr } = await supabase
     .from("marketplace_listado")
-    .select("id_listado, estado")
+    .select(`
+      id_listado,
+      estado,
+      id_inventario,
+      inventario:inventario_producto(
+        id,
+        id_producto
+      )
+    `)
     .eq("id_listado", id_listado)
     .maybeSingle();
 
-  if (!listado) return res.status(404).json({ success: false, error: "Listado no encontrado" });
+  if (listadoErr) {
+    return res.status(500).json({ success: false, error: listadoErr.message });
+  }
+
+  if (!listado) {
+    return res.status(404).json({ success: false, error: "Listado no encontrado" });
+  }
 
   if (listado.estado !== "activo") {
     return res.status(409).json({
       success: false,
-      error: "Solo se puede editar el precio de listados activos",
+      error: "Solo se pueden editar listados activos",
     });
+  }
+
+  const inventarioRaw = Array.isArray(listado.inventario)
+    ? listado.inventario[0]
+    : listado.inventario;
+
+  const id_producto = Number(inventarioRaw?.id_producto);
+
+  if (!id_producto || Number.isNaN(id_producto)) {
+    return res.status(404).json({
+      success: false,
+      error: "Producto del listado no encontrado",
+    });
+  }
+
+  const listadoUpdates: Record<string, any> = {};
+  const productoUpdates: Record<string, any> = {};
+
+  if (precio !== undefined) {
+    if (!precio || Number(precio) <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Precio inválido",
+      });
+    }
+
+    listadoUpdates.precio = Number(precio);
+  }
+
+  if (nombre !== undefined) productoUpdates.nombre = String(nombre).trim();
+  if (descripcion !== undefined) productoUpdates.descripcion = descripcion?.trim() || null;
+  if (costo !== undefined) productoUpdates.costo = Number(costo);
+  if (stock !== undefined) productoUpdates.stock = stock != null && stock !== "" ? Number(stock) : 0;
+  if (imagen !== undefined) productoUpdates.imagen = imagen?.trim() || null;
+  if (es_nuevo !== undefined) productoUpdates.es_nuevo = !!es_nuevo;
+  if (categoria !== undefined) productoUpdates.categoria = categoria || "perfil";
+  if (tipo !== undefined) productoUpdates.tipo = tipo || null;
+  if (equipo !== undefined) productoUpdates.equipo = equipo?.trim() || null;
+  if (rareza !== undefined) productoUpdates.rareza = rareza?.trim() || null;
+  if (id_temporada !== undefined) {
+    productoUpdates.id_temporada = id_temporada ? Number(id_temporada) : null;
+  }
+  if (css !== undefined) productoUpdates.css = css?.trim() || null;
+  if (es_de_liga !== undefined) productoUpdates.es_de_liga = !!es_de_liga;
+
+  if (!listadoUpdates.precio && Object.keys(productoUpdates).length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: "Nada que actualizar",
+    });
+  }
+
+  if (Object.keys(listadoUpdates).length > 0) {
+    const { error } = await supabase
+      .from("marketplace_listado")
+      .update(listadoUpdates)
+      .eq("id_listado", id_listado);
+
+    if (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  }
+
+  if (Object.keys(productoUpdates).length > 0) {
+    if (productoUpdates.nombre !== undefined && !productoUpdates.nombre) {
+      return res.status(400).json({
+        success: false,
+        error: "Nombre inválido",
+      });
+    }
+
+    if (
+      productoUpdates.costo !== undefined &&
+      (Number.isNaN(productoUpdates.costo) || productoUpdates.costo < 0)
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: "Costo inválido",
+      });
+    }
+
+    const { error } = await supabase
+      .from("producto")
+      .update(productoUpdates)
+      .eq("id_producto", id_producto);
+
+    if (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
   }
 
   const { data, error } = await supabase
     .from("marketplace_listado")
-    .update({ precio: Number(precio) })
-    .eq("id_listado", id_listado)
     .select(ADMIN_LISTADO_FIELDS)
+    .eq("id_listado", id_listado)
     .single();
 
-  if (error) return res.status(500).json({ success: false, error: error.message });
+  if (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
 
   try {
     const [normalizado] = await normalizarListados([data]);
@@ -561,6 +913,371 @@ router.put("/marketplace/listados/:id_listado", async (req, res) => {
       success: false,
       error: err.message || "Error cargando vendedor",
     });
+  }
+});
+
+/* ====================== FORO / MODERACION ADMIN ====================== */
+
+router.get("/forum/subforos", async (_req, res) => {
+  const { data, error } = await supabase
+    .from("forum_subforums")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error) return res.status(500).json({ success: false, error: error.message });
+  return res.json({ success: true, data: data || [] });
+});
+
+router.post("/forum/subforos", async (req, res) => {
+  const adminId = req.userId!;
+  const name = String(req.body?.name || "").trim();
+  const slug = normalizeSlug(req.body?.slug || name);
+  const description = String(req.body?.description || "").trim() || null;
+
+  if (!name || slug.length < 3) {
+    return res.status(400).json({ success: false, error: "Nombre o slug invalido" });
+  }
+
+  const { data, error } = await supabase
+    .from("forum_subforums")
+    .insert({
+      name,
+      slug,
+      description,
+      created_by: adminId,
+    })
+    .select("*")
+    .single();
+
+  if (error) return res.status(500).json({ success: false, error: error.message });
+  return res.status(201).json({ success: true, data });
+});
+
+router.patch("/forum/subforos/:id", async (req, res) => {
+  const updates: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+  };
+
+  if (req.body?.name !== undefined) updates.name = String(req.body.name).trim();
+  if (req.body?.description !== undefined) {
+    updates.description = String(req.body.description || "").trim() || null;
+  }
+  if (req.body?.slug !== undefined) {
+    const slug = normalizeSlug(req.body.slug);
+    if (slug.length < 3) return res.status(400).json({ success: false, error: "Slug invalido" });
+    updates.slug = slug;
+  }
+  if (req.body?.is_active !== undefined) updates.is_active = req.body.is_active === true;
+
+  const { data, error } = await supabase
+    .from("forum_subforums")
+    .update(updates)
+    .eq("id", Number(req.params.id))
+    .select("*")
+    .single();
+
+  if (error) return res.status(500).json({ success: false, error: error.message });
+  return res.json({ success: true, data });
+});
+
+router.delete("/forum/subforos/:id", async (req, res) => {
+  const { data, error } = await supabase
+    .from("forum_subforums")
+    .update({ is_active: false, updated_at: new Date().toISOString() })
+    .eq("id", Number(req.params.id))
+    .select("*")
+    .single();
+
+  if (error) return res.status(500).json({ success: false, error: error.message });
+  return res.json({ success: true, data });
+});
+
+router.get("/forum/moderation", async (_req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("moderation_events")
+      .select(`
+        *,
+        usuario:usuario(id_usuario, nickname, nombre_usuario, correo)
+      `)
+      .eq("scope", "forum")
+      .eq("status", "flagged")
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    if (error) throw error;
+
+    const items = (
+      await Promise.all(
+        (data || []).map(async (event) => ({
+          ...event,
+          target: await getModerationTarget(event),
+        }))
+      )
+    ).filter((item) => item.target?.status === "pending_review");
+
+    return res.json({ success: true, data: items });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: getErrorMessage(error) });
+  }
+});
+
+router.post("/forum/moderation/:eventId/resolve", async (req, res) => {
+  try {
+    const adminId = req.userId!;
+    const action = String(req.body?.action || "");
+    const notes = String(req.body?.notes || "").trim() || null;
+
+    if (!["approve", "reject"].includes(action)) {
+      return res.status(400).json({ success: false, error: "Accion invalida" });
+    }
+
+    const { data: event, error: eventError } = await supabase
+      .from("moderation_events")
+      .select("*")
+      .eq("id", Number(req.params.eventId))
+      .maybeSingle();
+
+    if (eventError) throw eventError;
+    if (!event) return res.status(404).json({ success: false, error: "Alerta no encontrada" });
+
+    const table = event.target_type === "post" ? "forum_posts" : "forum_comments";
+    const nextStatus = action === "approve" ? "published" : "rejected";
+    const updates: Record<string, unknown> = {
+      status: nextStatus,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (nextStatus === "published") updates.published_at = new Date().toISOString();
+
+    const { error: targetError } = await supabase
+      .from(table)
+      .update(updates)
+      .eq("id", Number(event.target_id));
+
+    if (targetError) throw targetError;
+
+    const { error: actionError } = await supabase.from("moderation_actions").insert({
+      event_id: event.id,
+      admin_id: adminId,
+      action,
+      notes,
+    });
+
+    if (actionError) throw actionError;
+
+    return res.json({ success: true });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: getErrorMessage(error) });
+  }
+});
+
+router.get("/forum/reports", async (_req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("forum_reports")
+      .select(`
+        *,
+        usuario:usuario!forum_reports_id_usuario_fkey(id_usuario, nickname, nombre_usuario, correo)
+      `)
+      .eq("status", "open")
+      .order("created_at", { ascending: false })
+      .limit(100);
+
+    if (error) throw error;
+
+    const items = await Promise.all(
+      (data || []).map(async (report) => ({
+        ...report,
+        target: await getModerationTarget(report),
+      }))
+    );
+
+    return res.json({ success: true, data: items });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: getErrorMessage(error) });
+  }
+});
+
+router.put("/forum/reports/:id", async (req, res) => {
+  try {
+    const adminId = req.userId!;
+    const action = String(req.body?.action || req.body?.status || "");
+
+    if (!["approve", "block", "dismissed", "resolved"].includes(action)) {
+      return res.status(400).json({ success: false, error: "Accion invalida" });
+    }
+
+    const { data: report, error: fetchError } = await supabase
+      .from("forum_reports")
+      .select("*")
+      .eq("id", Number(req.params.id))
+      .maybeSingle();
+
+    if (fetchError) throw fetchError;
+    if (!report) return res.status(404).json({ success: false, error: "Reporte no encontrado" });
+
+    const isBlock = action === "block" || action === "resolved";
+    const nextReportStatus = isBlock ? "resolved" : "dismissed";
+    const targetTable = report.target_type === "post" ? "forum_posts" : "forum_comments";
+
+    if (isBlock) {
+      const { error: targetError } = await supabase
+        .from(targetTable)
+        .update({ status: "rejected", updated_at: new Date().toISOString() })
+        .eq("id", Number(report.target_id));
+
+      if (targetError) throw targetError;
+    }
+
+    const { data, error } = await supabase
+      .from("forum_reports")
+      .update({
+        status: nextReportStatus,
+        reviewed_by: adminId,
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq("target_type", report.target_type)
+      .eq("target_id", Number(report.target_id))
+      .eq("status", "open")
+      .select("*");
+
+    if (error) throw error;
+
+    await supabase.from("moderation_actions").insert({
+      admin_id: adminId,
+      action: isBlock ? "reject" : "approve",
+      notes: `report:${report.target_type}:${report.target_id}`,
+    });
+
+    return res.json({ success: true, data: data || [] });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: getErrorMessage(error) });
+  }
+});
+
+router.get("/forum/users", async (_req, res) => {
+  try {
+    const [{ data: events, error: eventsError }, { data: restrictions, error: restrictionsError }] =
+      await Promise.all([
+        supabase
+          .from("moderation_events")
+          .select("id_usuario, status")
+          .eq("scope", "forum")
+          .eq("status", "flagged"),
+        supabase
+          .from("user_restrictions")
+          .select("*, usuario:usuario!user_restrictions_id_usuario_fkey(id_usuario, nickname, nombre_usuario, correo)")
+          .eq("scope", "forum")
+          .eq("active", true)
+          .order("created_at", { ascending: false }),
+      ]);
+
+    if (eventsError) throw eventsError;
+    if (restrictionsError) throw restrictionsError;
+
+    const alertCounts = (events || []).reduce<Record<number, number>>((acc, event: any) => {
+      const userId = Number(event.id_usuario);
+      acc[userId] = (acc[userId] || 0) + 1;
+      return acc;
+    }, {});
+    const userIds = Object.keys(alertCounts).map(Number);
+
+    let users: any[] = [];
+    if (userIds.length) {
+      const { data, error } = await supabase
+        .from("usuario")
+        .select("id_usuario, nickname, nombre_usuario, correo")
+        .in("id_usuario", userIds);
+      if (error) throw error;
+      users = data || [];
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        users: users.map((user) => ({
+          ...user,
+          alert_count: alertCounts[Number(user.id_usuario)] || 0,
+          restriction: (restrictions || []).find((restriction: any) => Number(restriction.id_usuario) === Number(user.id_usuario)) || null,
+        })),
+        restrictions: restrictions || [],
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: getErrorMessage(error) });
+  }
+});
+
+router.post("/forum/users/:userId/restrictions", async (req, res) => {
+  try {
+    const adminId = req.userId!;
+    const userId = Number(req.params.userId);
+    const reason = String(req.body?.reason || "").trim() || "Restriccion aplicada por moderacion";
+
+    await supabase
+      .from("user_restrictions")
+      .update({
+        active: false,
+        lifted_by: adminId,
+        lifted_at: new Date().toISOString(),
+      })
+      .eq("id_usuario", userId)
+      .eq("scope", "forum")
+      .eq("active", true);
+
+    const { data, error } = await supabase
+      .from("user_restrictions")
+      .insert({
+        id_usuario: userId,
+        scope: "forum",
+        restriction_type: "read_only",
+        reason,
+        active: true,
+        created_by: adminId,
+      })
+      .select("*")
+      .single();
+
+    if (error) throw error;
+
+    await supabase.from("moderation_actions").insert({
+      admin_id: adminId,
+      action: "ban_user",
+      notes: `forum:${userId}:${reason}`,
+    });
+
+    return res.status(201).json({ success: true, data });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: getErrorMessage(error) });
+  }
+});
+
+router.delete("/forum/restrictions/:id", async (req, res) => {
+  try {
+    const adminId = req.userId!;
+    const { data, error } = await supabase
+      .from("user_restrictions")
+      .update({
+        active: false,
+        lifted_by: adminId,
+        lifted_at: new Date().toISOString(),
+      })
+      .eq("id", Number(req.params.id))
+      .select("*")
+      .single();
+
+    if (error) throw error;
+
+    await supabase.from("moderation_actions").insert({
+      admin_id: adminId,
+      action: "unban_user",
+      notes: `forum:${data.id_usuario}`,
+    });
+
+    return res.json({ success: true, data });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: getErrorMessage(error) });
   }
 });
 
