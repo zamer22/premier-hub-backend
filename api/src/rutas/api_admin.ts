@@ -634,14 +634,44 @@ router.post("/marketplace/publicar", async (req, res) => {
 router.delete("/marketplace/cancelar/:id_listado", async (req, res) => {
   const id_listado = Number(req.params.id_listado);
 
+  const adminIdRaw = (req.query.id_usuario ?? req.header("x-id-usuario")) as
+    | string
+    | number
+    | undefined;
+
+  const adminId = adminIdRaw != null ? Number(adminIdRaw) : NaN;
+
+  if (!id_listado || Number.isNaN(id_listado)) {
+    return res.status(400).json({
+      success: false,
+      error: "ID de listado inválido",
+    });
+  }
+
   const { data: listado, error: fetchErr } = await supabase
     .from("marketplace_listado")
-    .select("id_listado, estado")
+    .select(`
+      id_listado,
+      id_vendedor,
+      id_inventario,
+      estado,
+      inventario:inventario_producto(
+        id,
+        id_usuario,
+        id_producto,
+        es_perfil
+      )
+    `)
     .eq("id_listado", id_listado)
     .maybeSingle();
 
-  if (fetchErr) return res.status(500).json({ success: false, error: fetchErr.message });
-  if (!listado) return res.status(404).json({ success: false, error: "Listado no encontrado" });
+  if (fetchErr) {
+    return res.status(500).json({ success: false, error: fetchErr.message });
+  }
+
+  if (!listado) {
+    return res.status(404).json({ success: false, error: "Listado no encontrado" });
+  }
 
   if (listado.estado !== "activo") {
     return res.status(409).json({
@@ -650,50 +680,248 @@ router.delete("/marketplace/cancelar/:id_listado", async (req, res) => {
     });
   }
 
-  const { error } = await supabase
+  const inventarioRaw = Array.isArray(listado.inventario)
+    ? listado.inventario[0]
+    : listado.inventario;
+
+  const inventario = inventarioRaw || null;
+
+  if (!inventario) {
+    return res.status(404).json({
+      success: false,
+      error: "Inventario del listado no encontrado",
+    });
+  }
+
+  const inventarioId = Number(listado.id_inventario);
+  const productoId = Number(inventario.id_producto);
+
+  const esListadoDelAdmin = Number(listado.id_vendedor) === adminId;
+
+  if (!esListadoDelAdmin) {
+    const { error } = await supabase
+      .from("marketplace_listado")
+      .update({ estado: "cancelado" })
+      .eq("id_listado", id_listado);
+
+    if (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+
+    return res.json({
+      success: true,
+      removed: false,
+      data: {
+        id_listado,
+        estado: "cancelado",
+      },
+    });
+  }
+
+  await supabase
+    .from("usuario_equipamiento")
+    .update({ marco_inventario_id: null })
+    .eq("marco_inventario_id", inventarioId);
+
+  await supabase
+    .from("usuario_equipamiento")
+    .update({ titulo_inventario_id: null })
+    .eq("titulo_inventario_id", inventarioId);
+
+  await supabase
+    .from("usuario_equipamiento")
+    .update({ trofeo_inventario_id: null })
+    .eq("trofeo_inventario_id", inventarioId);
+
+  await supabase
+    .from("usuario_equipamiento")
+    .update({ banner_inventario_id: null })
+    .eq("banner_inventario_id", inventarioId);
+
+  const { error: deleteListadoErr } = await supabase
     .from("marketplace_listado")
-    .update({ estado: "cancelado" })
+    .delete()
     .eq("id_listado", id_listado);
 
-  if (error) return res.status(500).json({ success: false, error: error.message });
+  if (deleteListadoErr) {
+    return res.status(500).json({
+      success: false,
+      error: deleteListadoErr.message,
+    });
+  }
 
-  res.json({ success: true });
+  const { error: deleteInventarioErr } = await supabase
+    .from("inventario_producto")
+    .delete()
+    .eq("id", inventarioId)
+    .eq("id_usuario", adminId)
+    .eq("id_producto", productoId);
+
+  if (deleteInventarioErr) {
+    return res.status(500).json({
+      success: false,
+      error: deleteInventarioErr.message,
+    });
+  }
+
+  res.json({
+    success: true,
+    removed: true,
+    data: {
+      id_listado,
+      id_inventario: inventarioId,
+      id_producto: productoId,
+    },
+  });
 });
 
 router.put("/marketplace/listados/:id_listado", async (req, res) => {
   const id_listado = Number(req.params.id_listado);
-  const { precio } = req.body;
 
-  if (!precio || Number(precio) <= 0) {
-    return res.status(400).json({
-      success: false,
-      error: "Precio inválido",
-    });
-  }
+  const {
+    precio,
+    nombre,
+    descripcion,
+    costo,
+    stock,
+    imagen,
+    es_nuevo,
+    categoria,
+    tipo,
+    equipo,
+    rareza,
+    id_temporada,
+    css,
+    es_de_liga,
+  } = req.body;
 
-  const { data: listado } = await supabase
+  const { data: listado, error: listadoErr } = await supabase
     .from("marketplace_listado")
-    .select("id_listado, estado")
+    .select(`
+      id_listado,
+      estado,
+      id_inventario,
+      inventario:inventario_producto(
+        id,
+        id_producto
+      )
+    `)
     .eq("id_listado", id_listado)
     .maybeSingle();
 
-  if (!listado) return res.status(404).json({ success: false, error: "Listado no encontrado" });
+  if (listadoErr) {
+    return res.status(500).json({ success: false, error: listadoErr.message });
+  }
+
+  if (!listado) {
+    return res.status(404).json({ success: false, error: "Listado no encontrado" });
+  }
 
   if (listado.estado !== "activo") {
     return res.status(409).json({
       success: false,
-      error: "Solo se puede editar el precio de listados activos",
+      error: "Solo se pueden editar listados activos",
     });
+  }
+
+  const inventarioRaw = Array.isArray(listado.inventario)
+    ? listado.inventario[0]
+    : listado.inventario;
+
+  const id_producto = Number(inventarioRaw?.id_producto);
+
+  if (!id_producto || Number.isNaN(id_producto)) {
+    return res.status(404).json({
+      success: false,
+      error: "Producto del listado no encontrado",
+    });
+  }
+
+  const listadoUpdates: Record<string, any> = {};
+  const productoUpdates: Record<string, any> = {};
+
+  if (precio !== undefined) {
+    if (!precio || Number(precio) <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Precio inválido",
+      });
+    }
+
+    listadoUpdates.precio = Number(precio);
+  }
+
+  if (nombre !== undefined) productoUpdates.nombre = String(nombre).trim();
+  if (descripcion !== undefined) productoUpdates.descripcion = descripcion?.trim() || null;
+  if (costo !== undefined) productoUpdates.costo = Number(costo);
+  if (stock !== undefined) productoUpdates.stock = stock != null && stock !== "" ? Number(stock) : 0;
+  if (imagen !== undefined) productoUpdates.imagen = imagen?.trim() || null;
+  if (es_nuevo !== undefined) productoUpdates.es_nuevo = !!es_nuevo;
+  if (categoria !== undefined) productoUpdates.categoria = categoria || "perfil";
+  if (tipo !== undefined) productoUpdates.tipo = tipo || null;
+  if (equipo !== undefined) productoUpdates.equipo = equipo?.trim() || null;
+  if (rareza !== undefined) productoUpdates.rareza = rareza?.trim() || null;
+  if (id_temporada !== undefined) {
+    productoUpdates.id_temporada = id_temporada ? Number(id_temporada) : null;
+  }
+  if (css !== undefined) productoUpdates.css = css?.trim() || null;
+  if (es_de_liga !== undefined) productoUpdates.es_de_liga = !!es_de_liga;
+
+  if (!listadoUpdates.precio && Object.keys(productoUpdates).length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: "Nada que actualizar",
+    });
+  }
+
+  if (Object.keys(listadoUpdates).length > 0) {
+    const { error } = await supabase
+      .from("marketplace_listado")
+      .update(listadoUpdates)
+      .eq("id_listado", id_listado);
+
+    if (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  }
+
+  if (Object.keys(productoUpdates).length > 0) {
+    if (productoUpdates.nombre !== undefined && !productoUpdates.nombre) {
+      return res.status(400).json({
+        success: false,
+        error: "Nombre inválido",
+      });
+    }
+
+    if (
+      productoUpdates.costo !== undefined &&
+      (Number.isNaN(productoUpdates.costo) || productoUpdates.costo < 0)
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: "Costo inválido",
+      });
+    }
+
+    const { error } = await supabase
+      .from("producto")
+      .update(productoUpdates)
+      .eq("id_producto", id_producto);
+
+    if (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
   }
 
   const { data, error } = await supabase
     .from("marketplace_listado")
-    .update({ precio: Number(precio) })
-    .eq("id_listado", id_listado)
     .select(ADMIN_LISTADO_FIELDS)
+    .eq("id_listado", id_listado)
     .single();
 
-  if (error) return res.status(500).json({ success: false, error: error.message });
+  if (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
 
   try {
     const [normalizado] = await normalizarListados([data]);
