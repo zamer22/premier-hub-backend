@@ -4,17 +4,6 @@ function stripTrailingSlash(value: string) {
   return value.replace(/\/$/, "");
 }
 
-function normalizePublicSupabaseBase(value: string) {
-  const parsed = new URL(value);
-
-  if (parsed.hostname === "supabase.zamer-o.com") {
-    parsed.protocol = "https:";
-    parsed.port = "";
-  }
-
-  return stripTrailingSlash(parsed.origin);
-}
-
 function isPrivateHost(hostname: string) {
   return (
     hostname === "localhost" ||
@@ -30,13 +19,7 @@ function getPublicSupabaseBase() {
     process.env.SUPABASE_PUBLIC_URL?.trim() ||
     process.env.VITE_SUPABASE_URL?.trim();
 
-  if (configuredPublicUrl) {
-    try {
-      return normalizePublicSupabaseBase(configuredPublicUrl);
-    } catch {
-      return DEFAULT_PUBLIC_SUPABASE_URL;
-    }
-  }
+  if (configuredPublicUrl) return stripTrailingSlash(configuredPublicUrl);
 
   const supabaseUrl = process.env.SUPABASE_URL?.trim();
   if (!supabaseUrl) return DEFAULT_PUBLIC_SUPABASE_URL;
@@ -46,23 +29,30 @@ function getPublicSupabaseBase() {
     if (process.env.NODE_ENV === "production" && isPrivateHost(parsed.hostname)) {
       return DEFAULT_PUBLIC_SUPABASE_URL;
     }
-    return normalizePublicSupabaseBase(supabaseUrl);
   } catch {
     return DEFAULT_PUBLIC_SUPABASE_URL;
   }
+
+  return stripTrailingSlash(supabaseUrl);
 }
 
 export function normalizeSupabaseSignedUrl(signedUrl: string | null | undefined) {
   if (!signedUrl) return null;
 
+  const withoutPublicPort = signedUrl.replace(
+    /^https?:\/\/supabase\.zamer-o\.com(?::\d+)?/i,
+    DEFAULT_PUBLIC_SUPABASE_URL,
+  );
+
   try {
     const publicBase = new URL(getPublicSupabaseBase());
-    const normalizedUrl = new URL(signedUrl);
+    const normalizedUrl = new URL(withoutPublicPort);
     normalizedUrl.protocol = publicBase.protocol;
-    normalizedUrl.host = publicBase.host;
+    normalizedUrl.hostname = publicBase.hostname;
+    normalizedUrl.port = publicBase.port;
     return normalizedUrl.toString();
   } catch {
-    return signedUrl;
+    return withoutPublicPort;
   }
 }
 
