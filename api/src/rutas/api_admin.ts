@@ -401,13 +401,17 @@ router.post("/productos/imagen", upload.single("imagen"), async (req, res) => {
     });
   }
 
-  const { data } = supabase.storage.from(PRODUCTOS_BUCKET).getPublicUrl(filePath);
+  // No usar getPublicUrl(): arma la URL con el SUPABASE_URL interno del backend
+  // (http://192.168.1.24:8000) que el navegador no alcanza. Construimos la URL
+  // publica con el dominio del tunnel, igual que las fotos de perfil en api_auth.
+  const supabasePublicBase = (process.env.SUPABASE_PUBLIC_URL || process.env.SUPABASE_URL!).replace(/\/$/, "");
+  const publicUrl = `${supabasePublicBase}/storage/v1/object/public/${PRODUCTOS_BUCKET}/${filePath}`;
 
   res.status(201).json({
     success: true,
     data: {
       path: filePath,
-      publicUrl: data.publicUrl,
+      publicUrl,
     },
   });
 });
@@ -948,7 +952,7 @@ router.get("/forum/subforos", async (_req, res) => {
 });
 
 router.post("/forum/subforos", async (req, res) => {
-  const adminId = getAdminId(req);
+  const adminId = req.userId!;
   const name = String(req.body?.name || "").trim();
   const slug = normalizeSlug(req.body?.slug || name);
   const description = String(req.body?.description || "").trim() || null;
@@ -1043,7 +1047,7 @@ router.get("/forum/moderation", async (_req, res) => {
 
 router.post("/forum/moderation/:eventId/resolve", async (req, res) => {
   try {
-    const adminId = getAdminId(req);
+    const adminId = req.userId!;
     const action = String(req.body?.action || "");
     const notes = String(req.body?.notes || "").trim() || null;
 
@@ -1120,7 +1124,7 @@ router.get("/forum/reports", async (_req, res) => {
 
 router.put("/forum/reports/:id", async (req, res) => {
   try {
-    const adminId = getAdminId(req);
+    const adminId = req.userId!;
     const action = String(req.body?.action || req.body?.status || "");
 
     if (!["approve", "block", "dismissed", "resolved"].includes(action)) {
@@ -1230,7 +1234,7 @@ router.get("/forum/users", async (_req, res) => {
 
 router.post("/forum/users/:userId/restrictions", async (req, res) => {
   try {
-    const adminId = getAdminId(req);
+    const adminId = req.userId!;
     const userId = Number(req.params.userId);
     const reason = String(req.body?.reason || "").trim() || "Restriccion aplicada por moderacion";
 
@@ -1274,7 +1278,7 @@ router.post("/forum/users/:userId/restrictions", async (req, res) => {
 
 router.delete("/forum/restrictions/:id", async (req, res) => {
   try {
-    const adminId = getAdminId(req);
+    const adminId = req.userId!;
     const { data, error } = await supabase
       .from("user_restrictions")
       .update({
