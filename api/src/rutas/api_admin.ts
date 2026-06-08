@@ -1,4 +1,4 @@
-import { Router, Request, Response, NextFunction } from "express";
+import { Router, Request } from "express";
 import multer from "multer";
 import supabase from "../db";
 import { requireAdmin } from "../middleware/requireAuth";
@@ -52,34 +52,7 @@ const upload = multer({
 
 const PRODUCTOS_BUCKET = "productosMarketplace";
 
-async function verificarAdmin(req: Request, res: Response, next: NextFunction) {
-  const idRaw = (req.query.id_usuario ?? req.body?.id_usuario ?? req.header("x-id-usuario")) as
-    | string
-    | number
-    | undefined;
-
-  const id = idRaw != null ? Number(idRaw) : NaN;
-
-  if (!id || Number.isNaN(id)) {
-    return res.status(401).json({ success: false, error: "Falta id_usuario" });
-  }
-
-  const { data, error } = await supabase
-    .from("usuario")
-    .select("es_admin")
-    .eq("id_usuario", id)
-    .maybeSingle();
-
-  if (error) return res.status(500).json({ success: false, error: error.message });
-
-  if (!data || !data.es_admin) {
-    return res.status(403).json({ success: false, error: "Acceso solo para administradores" });
-  }
-
-  next();
-}
-
-router.use(verificarAdmin);
+router.use(requireAdmin);
 
 function normalizarProducto(p: any) {
   return {
@@ -154,8 +127,15 @@ async function normalizarListados(rows: any[]) {
 }
 
 function getAdminId(req: Request) {
-  const idRaw = (req.query.id_usuario ?? req.body?.id_usuario ?? req.header("x-id-usuario")) as string | number | undefined;
-  return Number(idRaw);
+  const idRaw =
+    req.userId ??
+    req.body?.id_admin ??
+    req.body?.id_usuario ??
+    req.query.id_usuario ??
+    req.header("x-id-usuario");
+
+  const id = Number(idRaw);
+  return Number.isInteger(id) && id > 0 ? id : NaN;
 }
 
 function getErrorMessage(error: unknown) {
@@ -547,7 +527,7 @@ router.get("/marketplace/listados", async (req, res) => {
 router.post("/marketplace/publicar", async (req, res) => {
   const { id_admin, id_producto, precio } = req.body;
 
-  const adminId = Number(id_admin ?? req.query.id_usuario ?? req.header("x-id-usuario"));
+  const adminId = getAdminId(req);
   const productoId = Number(id_producto);
   const precioNum = Number(precio);
 
@@ -653,17 +633,19 @@ router.post("/marketplace/publicar", async (req, res) => {
 router.delete("/marketplace/cancelar/:id_listado", async (req, res) => {
   const id_listado = Number(req.params.id_listado);
 
-  const adminIdRaw = (req.query.id_usuario ?? req.header("x-id-usuario")) as
-    | string
-    | number
-    | undefined;
-
-  const adminId = adminIdRaw != null ? Number(adminIdRaw) : NaN;
+  const adminId = getAdminId(req);
 
   if (!id_listado || Number.isNaN(id_listado)) {
     return res.status(400).json({
       success: false,
       error: "ID de listado inválido",
+    });
+  }
+
+  if (!Number.isInteger(adminId) || adminId <= 0) {
+    return res.status(401).json({
+      success: false,
+      error: "No se pudo identificar al admin",
     });
   }
 
