@@ -98,7 +98,7 @@ docker build -t premier-api:preprod ./api
 docker run -p 4000:4000 --env-file api/.env premier-api:latest
 ```
 
-El `Dockerfile` usa `node:20-alpine`, instala dependencias, compila TypeScript y expone el puerto `4000`.
+El `Dockerfile` usa `node:20-alpine`, instala dependencias, compila TypeScript y expone el puerto `4000`
 
 ---
 
