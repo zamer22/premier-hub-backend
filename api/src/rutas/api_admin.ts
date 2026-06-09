@@ -1024,7 +1024,7 @@ router.get("/forum/moderation", async (_req, res) => {
         usuario:usuario(id_usuario, nickname, nombre_usuario, correo)
       `)
       .eq("scope", "forum")
-      .eq("status", "flagged")
+      .in("status", ["flagged", "error"])
       .order("created_at", { ascending: false })
       .limit(100);
 

@@ -366,7 +366,8 @@ router.post("/posts", async (req: Request<{}, {}, CreatePostBody>, res) => {
       text: `${title}\n\n${body}`,
       imageDataUrl: image?.dataUrl || null,
     });
-    const status: ForumStatus = moderation.flagged ? "pending_review" : "published";
+    const status: ForumStatus =
+      moderation.status === "clean" ? "published" : "pending_review";
     let imagePath: string | null = null;
 
     if (image) {
@@ -464,7 +465,8 @@ router.post("/posts/:id/comments", async (req: Request<{ id: string }, {}, Creat
     if (!post) return res.status(404).json({ success: false, error: "Post no encontrado" });
 
     const moderation = await moderateForumContent({ text: body });
-    const status: ForumStatus = moderation.flagged ? "pending_review" : "published";
+    const status: ForumStatus =
+      moderation.status === "clean" ? "published" : "pending_review";
 
     const { data, error } = await supabase
       .from("forum_comments")
