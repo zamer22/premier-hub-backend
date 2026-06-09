@@ -17,7 +17,7 @@ const MAX_SOURCE_PAGES = 4;
 const DEFAULT_NEWS_LIMIT = 8; // Límite predeterminado de noticias por página
 const MAX_NEWS_LIMIT = 12; // Límite máximo de noticias por página, 12 por no acabarme el API
 const MIN_RELEVANCE_SCORE = 3; // Puntuación mínima para considerar una noticia relevante
-const NEWS_CACHE_VERSION = "v2";
+const NEWS_CACHE_VERSION = "v3";
 const NEWS_CACHE_TTL_MS = 1000 * 60 * 20; // 20 minutos
 const SCRAPE_VIRTUAL_CONSOLE = new VirtualConsole(); // Evita que JSDOM imprima warnings o errores de scripts al hacer scraping de artículos
 const NEWS_BASE = process.env.NEWS_BASE_URL || "https://newsapi.org/v2";
@@ -361,7 +361,7 @@ Esta función normaliza el nombre del equipo y obtiene sus alias, devolviendo un
 */
 function getTeamQueryTerms(team: string): string[] {
   const normalizedTeam = normalizeComparable(team);
-  const aliases = TEAM_ALIASES[normalizedTeam] || [];
+  const aliases = TEAM_ALIASES[normalizedTeam.replace(/\s+/g, "")] || [];
   return Array.from(new Set([team, ...aliases]));
 }
 
@@ -482,7 +482,7 @@ Esta función normaliza el nombre del equipo y obtiene sus alias, devolviendo un
 */
 function getTeamPatterns(team: string): string[] {
   const normalizedTeam = normalizeComparable(team);
-  const aliases = TEAM_ALIASES[normalizedTeam] || [];
+  const aliases = TEAM_ALIASES[normalizedTeam.replace(/\s+/g, "")] || [];
 
   return Array.from(
     new Set(
@@ -582,14 +582,31 @@ Returns:
 Descripción:
 Esta función normaliza el texto del artículo y verifica si contiene alguno de los nombres de los equipos.
 */
-function extractTeams(article: NoticiaLimpia, equipos: string[]): string[] {
-  const text = normalizeComparable(
-    [article.title, article.description, article.content, article.sourceName]
-      .filter(Boolean)
-      .join(" "),
-  );
+function getTeamRelevance(article: NoticiaLimpia, team: string): number {
+  const fields = [
+    { value: article.title, weight: 8 },
+    { value: article.description, weight: 4 },
+    { value: article.content, weight: 1 },
+  ];
 
-  return equipos.filter((team) => matchesTeam(text, team));
+  return fields.reduce((score, field) => {
+    if (!field.value) return score;
+    return matchesTeam(normalizeComparable(field.value), team)
+      ? score + field.weight
+      : score;
+  }, 0);
+}
+
+function extractTeams(article: NoticiaLimpia, equipos: string[]): string[] {
+  return equipos
+    .map((team, index) => ({
+      team,
+      index,
+      score: getTeamRelevance(article, team),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map((item) => item.team);
 }
 
 /*
@@ -1210,6 +1227,14 @@ async function buildNewsSnapshot(
 
     rankedPool.push(...rankedArticles);
     transformedArticles = await transformRankedArticles(rankedPool, equipos);
+
+    if (options.team) {
+      const requestedTeam = normalizeComparable(options.team);
+      transformedArticles = transformedArticles.filter(
+        (article) =>
+          normalizeComparable(article.primaryTeam || "") === requestedTeam,
+      );
+    }
 
     const reachedRequestedPage = transformedArticles.length >= requiredResults;
     const totalResults =
