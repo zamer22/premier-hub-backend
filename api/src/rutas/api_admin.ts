@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, Request } from "express";
 import multer from "multer";
 import supabase from "../db";
 import { requireAdmin } from "../middleware/requireAuth";
@@ -125,6 +125,18 @@ async function normalizarListados(rows: any[]) {
   }
 
   return rows.map((l) => normalizarListado(l, vendedoresById));
+}
+
+function getAdminId(req: Request) {
+  const idRaw =
+    req.userId ??
+    req.body?.id_admin ??
+    req.body?.id_usuario ??
+    req.query.id_usuario ??
+    req.header("x-id-usuario");
+
+  const id = Number(idRaw);
+  return Number.isInteger(id) && id > 0 ? id : NaN;
 }
 
 function getErrorMessage(error: unknown) {
@@ -520,7 +532,7 @@ router.get("/marketplace/listados", async (req, res) => {
 router.post("/marketplace/publicar", async (req, res) => {
   const { id_admin, id_producto, precio } = req.body;
 
-  const adminId = Number(id_admin ?? req.query.id_usuario ?? req.header("x-id-usuario"));
+  const adminId = getAdminId(req);
   const productoId = Number(id_producto);
   const precioNum = Number(precio);
 
@@ -626,12 +638,19 @@ router.post("/marketplace/publicar", async (req, res) => {
 router.delete("/marketplace/cancelar/:id_listado", async (req, res) => {
   const id_listado = Number(req.params.id_listado);
 
-  const adminId = req.userId!;
+  const adminId = getAdminId(req);
 
   if (!id_listado || Number.isNaN(id_listado)) {
     return res.status(400).json({
       success: false,
       error: "ID de listado inválido",
+    });
+  }
+
+  if (!Number.isInteger(adminId) || adminId <= 0) {
+    return res.status(401).json({
+      success: false,
+      error: "No se pudo identificar al admin",
     });
   }
 
@@ -1006,7 +1025,7 @@ router.get("/forum/moderation", async (_req, res) => {
         usuario:usuario(id_usuario, nickname, nombre_usuario, correo)
       `)
       .eq("scope", "forum")
-      .eq("status", "flagged")
+      .in("status", ["flagged", "error"])
       .order("created_at", { ascending: false })
       .limit(100);
 
