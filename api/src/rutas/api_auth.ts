@@ -4,6 +4,7 @@ import type { Request, Response } from "express";
 import supabase from "../db";
 import { getSessionUserId } from "../middleware/requireAuth";
 import { accountDeleteLimiter, authLimiter } from "../middleware/rateLimit";
+import { buildSupabasePublicObjectUrl } from "../services/storageUrl";
 
 const router = Router();
 
@@ -457,8 +458,7 @@ router.post(
         return;
       }
 
-      const supabasePublicBase = (process.env.SUPABASE_PUBLIC_URL || process.env.SUPABASE_URL!).replace(/\/$/, "");
-      const publicUrl = `${supabasePublicBase}/storage/v1/object/public/${PROFILE_PICTURES_BUCKET}/${path}`;
+      const publicUrl = buildSupabasePublicObjectUrl(PROFILE_PICTURES_BUCKET, path);
       const { data: updatedUser, error: updateError } = await supabase
         .from("usuario")
         .update({ foto_perfil: publicUrl })
